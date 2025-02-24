@@ -1,0 +1,7 @@
+BasedOnStyle: Google
+IndentWidth: 4
+TabWidth: 4
+AccessModifierOffset: -4
+IndentCaseLabels: false
+MacroBlockBegin: '^ASYNC_FOR$|^INLINE_ASYNC_FOR$|^SCOPED_INLINE_ASYNC_FOR$|^ON_MISS_BEGIN$|^ON_MISS_BEGIN_X$|^SYNC_FOR$'
+MacroBlockEnd: '^ASYNC_FOR_END$|^INLINE_ASYNC_FOR_END$|^SCOPED_INLINE_ASYNC_FOR_END$|^ON_MISS_END$|^ON_MISS_END_X$|^SYNC_FOR_END$'

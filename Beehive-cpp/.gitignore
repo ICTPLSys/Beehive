@@ -1,0 +1,9 @@
+.vscode
+.cache
+build
+node_modules
+package-lock.json
+package.json
+*.mtx
+./benchmark/mg/build/*
+*.classic

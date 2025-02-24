@@ -1,0 +1,28 @@
+#ifndef CONFIG
+#define CONFIG(TYPE, VAR, DEFAULT)
+#endif
+// Configure of RDMA
+CONFIG(int, cq_entries, 2097152)
+CONFIG(uint32_t, qp_send_cap, 128)
+CONFIG(uint32_t, qp_recv_cap, 8)
+CONFIG(uint32_t, qp_max_send_sge, 1)
+CONFIG(uint32_t, qp_max_recv_sge, 1)
+CONFIG(uint8_t, qp_max_dest_rd_atomic, 1)
+CONFIG(uint8_t, qp_max_rd_atomic, 1)
+CONFIG(int /* ibv_mtu */, qp_mtu, IBV_MTU_4096)
+CONFIG(uint8_t, qp_min_rnr_timer, 12 /* 0.64 milliseconds delay */)
+CONFIG(uint8_t, qp_timeout, 8 /* 1048.576 usec (0.00104 sec) */)
+CONFIG(uint8_t, qp_retry_cnt, 7)
+CONFIG(uint8_t, qp_rnr_retry, 7)
+CONFIG(uint8_t, ib_port, 1)
+CONFIG(std::string, server_addr, "127.0.0.1")
+CONFIG(std::string, server_port, "50000")
+
+// Configure of Server & Client
+CONFIG(uint16_t, qp_count, 1)
+CONFIG(size_t, server_buffer_size, 1024 * 1024 * 1024)
+CONFIG(size_t, client_buffer_size, 16 * 1024 * 1024)
+CONFIG(size_t, evict_batch_size, 256 * 1024)
+CONFIG(size_t, check_cq_batch_size, 16)
+CONFIG(size_t, max_thread_cnt, 1)
+CONFIG(size_t, evacuate_thread_cnt, 1)

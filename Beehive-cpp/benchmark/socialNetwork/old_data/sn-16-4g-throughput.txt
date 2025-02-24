@@ -1,0 +1,228 @@
+config: client buffer size = 4294967296
+initializing rdma client
+INFO: here is concurrent array cache
+running server on 8 cores
+size of post: 1872
+register user
+follow
+post initial
+compose post 0
+compose post 100000
+compose post 100000
+compose post 100000
+compose post 100000
+compose post 200000
+compose post 300000
+compose post 300000
+compose post 400000
+compose post 500000
+compose post 500000
+compose post 500000
+compose post 600000
+compose post 700000
+compose post 700000
+compose post 700000
+compose post 800000
+compose post 800000
+compose post 900000
+compose post 900000
+compose post 1000000
+compose post 1000000
+compose post 1100000
+compose post 1200000
+compose post 1200000
+compose post 1300000
+compose post 1300000
+compose post 1400000
+compose post 1500000
+compose post 1600000
+compose post 1700000
+compose post 1700000
+compose post 1800000
+compose post 1900000
+compose post 1900000
+compose post 2000000
+compose post 2100000
+compose post 2200000
+compose post 2300000
+compose post 2400000
+compose post 2400000
+compose post 2500000
+compose post 2600000
+compose post 2700000
+compose post 2800000
+compose post 2900000
+compose post 3000000
+compose post 3000000
+compose post 3000000
+compose post 3100000
+compose post 3200000
+compose post 3300000
+compose post 3400000
+compose post 3400000
+compose post 3500000
+compose post 3600000
+compose post 3700000
+compose post 3700000
+compose post 3700000
+compose post 3800000
+compose post 3800000
+compose post 3900000
+compose post 4000000
+compose post 4000000
+compose post 4000000
+compose post 4100000
+compose post 4200000
+compose post 4300000
+compose post 4300000
+compose post 4400000
+compose post 4400000
+compose post 4400000
+compose post 4400000
+compose post 4500000
+compose post 4500000
+compose post 4600000
+compose post 4600000
+compose post 4600000
+compose post 4700000
+compose post 4800000
+compose post 4900000
+compose post 5000000
+compose post 5100000
+compose post 5100000
+compose post 5200000
+compose post 5300000
+compose post 5400000
+compose post 5400000
+compose post 5500000
+compose post 5600000
+compose post 5700000
+compose post 5800000
+compose post 5900000
+compose post 5900000
+compose post 6000000
+compose post 6100000
+compose post 6200000
+compose post 6300000
+compose post 6400000
+compose post 6400000
+compose post 6400000
+compose post 6500000
+compose post 6600000
+compose post 6700000
+compose post 6700000
+compose post 6700000
+compose post 6700000
+compose post 6800000
+compose post 6900000
+compose post 6900000
+compose post 6900000
+compose post 6900000
+compose post 7000000
+compose post 7000000
+compose post 7000000
+compose post 7100000
+compose post 7200000
+compose post 7300000
+compose post 7300000
+compose post 7400000
+compose post 7400000
+compose post 7400000
+compose post 7500000
+compose post 7600000
+compose post 7700000
+compose post 7700000
+compose post 7800000
+compose post 7900000
+compose post 8000000
+compose post 8100000
+compose post 8100000
+compose post 8100000
+compose post 8200000
+compose post 8300000
+compose post 8300000
+compose post 8400000
+compose post 8500000
+compose post 8600000
+compose post 8700000
+compose post 8700000
+compose post 8700000
+compose post 8800000
+compose post 8900000
+compose post 9000000
+compose post 9100000
+compose post 9200000
+compose post 9200000
+compose post 9300000
+compose post 9300000
+compose post 9400000
+compose post 9400000
+compose post 9500000
+compose post 9600000
+compose post 9600000
+compose post 9700000
+compose post 9800000
+compose post 9900000
+compose post 10000000
+compose post 10100000
+compose post 10100000
+compose post 10200000
+compose post 10300000
+compose post 10400000
+compose post 10500000
+compose post 10500000
+compose post 10600000
+compose post 10700000
+compose post 10700000
+compose post 10800000
+compose post 10800000
+compose post 10900000
+compose post 11000000
+compose post 11000000
+compose post 11100000
+compose post 11200000
+compose post 11300000
+compose post 11300000
+compose post 11300000
+compose post 11300000
+compose post 11400000
+compose post 11500000
+compose post 11600000
+compose post 11700000
+compose post 11800000
+compose post 11800000
+compose post 11800000
+compose post 11900000
+compose post 11900000
+compose post 11900000
+compose post 12000000
+compose post 12000000
+compose post 12100000
+compose post 12200000
+compose post 12200000
+compose post 12300000
+compose post 12300000
+Warm up...
+Bench...
+    goal-lat op-duration    run-time     req-cnt    serv-cnt      q-mean       q-p50       q-p90       q-p95       q-p99      s-mean       s-p50       s-p90       s-p95       s-p99
+allocated size: 32242139136
+allocated size(KB): 3.14865e+07
+allocated size(MB): 30748.5
+allocated size(GB): 30.0278
+400000000000        2000     7.00071     7214237     7211788      140666      134015      242175      289023      424191      147463      139519      253055      301567      445951
+400000000000        2000     7.00055     7185089     7183503      145235      137855      246143      293887      430079      152213      143487      257151      306687      451071
+400000000000        2000     7.34091     6805275     6802531      161852      145919      256895      307199      460799      168988      151807      268287      320511      484863
+400000000000        2000     7.00045     6516909     6515868      179398      158591      279295      336383      513279      187394      165119      291327      350975      539135
+400000000000        2000     7.00043     5936984     5935599      207765      185087      302335      356607      523775      216725      192895      315391      371967      553983
+400000000000        2000     7.00045     6596789     6595420      183022      162175      271615      322559      476159      190839      168959      283903      337151      502527
+400000000000        2000     7.00057     6568888     6566966      184798      163967      271871      322815      473599      192602      170879      284159      337151      497407
+400000000000        2000     7.27951     6386920     6385553      189530      162431      277503      332543      497407      197281      169215      289791      347135      522751
+400000000000        2000     7.00044     5807775     5805384      209498      182271      315135      377599      567807      218372      189951      328447      393727      597503
+400000000000        2000     7.00048     5827168     5825766      212952      187007      306943      361983      532991      222050      194815      320255      378111      562687
+400000000000        2000     7.00059     6070175     6068641      200833      179583      292863      347391      512255      209445      186879      306175      363007      538623
+400000000000        2000     7.10979     5887862     5885244      206524      173951      294399      353279      544255      214921      181247      307455      368639      573439
+400000000000        2000     7.00043     5161201     5159580      234451      210431      346367      409599      607743      244685      219263      361215      427775      642559
+400000000000        2000     7.00045     5876285     5875299      212922      186751      302591      357887      530943      222021      194559      316159      373759      561151
+400000000000        2000     7.01381     5604020     5601949      215327      180607      305919      368127      575487      224331      188159      319487      384255      606719
+destroying rdma client
+used memory: 43700977664
