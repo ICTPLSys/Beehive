@@ -1,0 +1,21 @@
+cq_entries = 16384
+qp_send_cap = 128
+qp_recv_cap = 8
+qp_max_send_sge = 1
+qp_max_recv_sge = 1
+qp_max_rd_atomic = 16
+qp_mtu = 5
+qp_min_rnr_timer = 12
+qp_timeout = 8
+qp_retry_cnt = 7
+qp_rnr_retry = 7
+ib_port = 1
+client_memory_size = 16777216
+evict_batch_size = 262144
+poll_cq_batch_size = 16
+num_cores = 1
+num_evacuate_threads = 1
+
+servers = [
+    { addr = "127.0.0.1:8888", memory_size = 4294967296 },
+]
