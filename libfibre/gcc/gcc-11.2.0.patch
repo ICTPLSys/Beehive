@@ -1,0 +1,180 @@
+diff --git a/config/gthr.m4 b/config/gthr.m4
+index 4b937306a..7ff26c2a7 100644
+--- a/config/gthr.m4
++++ b/config/gthr.m4
+@@ -17,6 +17,7 @@ case $1 in
+     lynx)	thread_header=config/gthr-lynx.h ;;
+     mipssde)	thread_header=config/mips/gthr-mipssde.h ;;
+     posix)	thread_header=gthr-posix.h ;;
++    fibre)	thread_header=gthr-fibre.h ;;
+     rtems)	thread_header=config/gthr-rtems.h ;;
+     single)	thread_header=gthr-single.h ;;
+     tpf)	thread_header=config/s390/gthr-tpf.h ;;
+diff --git a/gcc/configure b/gcc/configure
+index 9b28369e3..43174b476 100755
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -12593,7 +12593,7 @@ case ${enable_threads} in
+     # default
+     target_thread_file='single'
+     ;;
+-  aix | dce | lynx | mipssde | posix | rtems | \
++  aix | dce | lynx | mipssde | posix | fibre | rtems | \
+   single | tpf | vxworks | win32)
+     target_thread_file=${enable_threads}
+     ;;
+diff --git a/gcc/configure.ac b/gcc/configure.ac
+index 162e08cbc..be5941ee0 100644
+--- a/gcc/configure.ac
++++ b/gcc/configure.ac
+@@ -1925,7 +1925,7 @@ case ${enable_threads} in
+     # default
+     target_thread_file='single'
+     ;;
+-  aix | dce | lynx | mipssde | posix | rtems | \
++  aix | dce | lynx | mipssde | posix | fibre | rtems | \
+   single | tpf | vxworks | win32)
+     target_thread_file=${enable_threads}
+     ;;
+diff --git a/libgcc/configure b/libgcc/configure
+index 4919a56f5..f0d58285e 100755
+--- a/libgcc/configure
++++ b/libgcc/configure
+@@ -5683,6 +5683,7 @@ case $target_thread_file in
+     lynx)	thread_header=config/gthr-lynx.h ;;
+     mipssde)	thread_header=config/mips/gthr-mipssde.h ;;
+     posix)	thread_header=gthr-posix.h ;;
++    fibre)	thread_header=gthr-fibre.h ;;
+     rtems)	thread_header=config/gthr-rtems.h ;;
+     single)	thread_header=gthr-single.h ;;
+     tpf)	thread_header=config/s390/gthr-tpf.h ;;
+diff --git a/libstdc++-v3/configure b/libstdc++-v3/configure
+index 326a279c5..475ec5207 100755
+--- a/libstdc++-v3/configure
++++ b/libstdc++-v3/configure
+@@ -15702,6 +15702,7 @@ case $target_thread_file in
+     lynx)	thread_header=config/gthr-lynx.h ;;
+     mipssde)	thread_header=config/mips/gthr-mipssde.h ;;
+     posix)	thread_header=gthr-posix.h ;;
++    fibre)	thread_header=gthr-fibre.h ;;
+     rtems)	thread_header=config/gthr-rtems.h ;;
+     single)	thread_header=gthr-single.h ;;
+     tpf)	thread_header=config/s390/gthr-tpf.h ;;
+diff --git a/libstdc++-v3/include/Makefile.am b/libstdc++-v3/include/Makefile.am
+index 40a41ef2a..92d51626a 100644
+--- a/libstdc++-v3/include/Makefile.am
++++ b/libstdc++-v3/include/Makefile.am
+@@ -1002,6 +1002,7 @@ thread_host_headers = \
+ 	${host_builddir}/gthr.h \
+ 	${host_builddir}/gthr-single.h \
+ 	${host_builddir}/gthr-posix.h \
++	${host_builddir}/gthr-fibre.h \
+ 	${host_builddir}/gthr-default.h
+ 
+ 
+@@ -1364,6 +1365,14 @@ ${host_builddir}/gthr-posix.h: ${toplevel_srcdir}/libgcc/gthr-posix.h \
+ 	    -e 's/\(${uppercase}*USE_WEAK\)/_GLIBCXX_\1/g' \
+ 	    < $< > $@
+ 
++${host_builddir}/gthr-fibre.h: ${toplevel_srcdir}/libgcc/gthr-fibre.h \
++				   stamp-${host_alias}
++	sed -e 's/\(UNUSED\)/_GLIBCXX_\1/g' \
++	    -e 's/\(GCC${uppercase}*_H\)/_GLIBCXX_\1/g' \
++	    -e 's/SUPPORTS_WEAK/__GXX_WEAK__/g' \
++	    -e 's/\(${uppercase}*USE_WEAK\)/_GLIBCXX_\1/g' \
++	    < $< > $@
++
+ ${host_builddir}/gthr-default.h: ${toplevel_srcdir}/libgcc/${thread_header} \
+ 				   stamp-${host_alias}
+ 	sed -e 's/\(UNUSED\)/_GLIBCXX_\1/g' \
+diff --git a/libstdc++-v3/include/Makefile.in b/libstdc++-v3/include/Makefile.in
+index fcd2b5b2d..5f13f797c 100644
+--- a/libstdc++-v3/include/Makefile.in
++++ b/libstdc++-v3/include/Makefile.in
+@@ -1345,6 +1345,7 @@ thread_host_headers = \
+ 	${host_builddir}/gthr.h \
+ 	${host_builddir}/gthr-single.h \
+ 	${host_builddir}/gthr-posix.h \
++	${host_builddir}/gthr-fibre.h \
+ 	${host_builddir}/gthr-default.h
+ 
+ pch1_source = ${glibcxx_srcdir}/include/precompiled/stdc++.h
+@@ -1847,6 +1848,14 @@ ${host_builddir}/gthr-posix.h: ${toplevel_srcdir}/libgcc/gthr-posix.h \
+ 	    -e 's/\(${uppercase}*USE_WEAK\)/_GLIBCXX_\1/g' \
+ 	    < $< > $@
+ 
++${host_builddir}/gthr-fibre.h: ${toplevel_srcdir}/libgcc/gthr-fibre.h \
++				   stamp-${host_alias}
++	sed -e 's/\(UNUSED\)/_GLIBCXX_\1/g' \
++	    -e 's/\(GCC${uppercase}*_H\)/_GLIBCXX_\1/g' \
++	    -e 's/SUPPORTS_WEAK/__GXX_WEAK__/g' \
++	    -e 's/\(${uppercase}*USE_WEAK\)/_GLIBCXX_\1/g' \
++	    < $< > $@
++
+ ${host_builddir}/gthr-default.h: ${toplevel_srcdir}/libgcc/${thread_header} \
+ 				   stamp-${host_alias}
+ 	sed -e 's/\(UNUSED\)/_GLIBCXX_\1/g' \
+diff --git a/libstdc++-v3/include/bits/this_thread_sleep.h b/libstdc++-v3/include/bits/this_thread_sleep.h
+index a87da388e..76f1e82a2 100644
+--- a/libstdc++-v3/include/bits/this_thread_sleep.h
++++ b/libstdc++-v3/include/bits/this_thread_sleep.h
+@@ -79,7 +79,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+ 	    static_cast<std::time_t>(__s.count()),
+ 	    static_cast<long>(__ns.count())
+ 	  };
+-	while (::nanosleep(&__ts, &__ts) == -1 && errno == EINTR)
++	while (::cfibre_nanosleep(&__ts, &__ts) == -1 && errno == EINTR)
+ 	  { }
+ #else
+ 	__sleep_for(__s, __ns);
+diff --git a/libstdc++-v3/libsupc++/guard.cc b/libstdc++-v3/libsupc++/guard.cc
+index ac919a25a..3f9aa481d 100644
+--- a/libstdc++-v3/libsupc++/guard.cc
++++ b/libstdc++-v3/libsupc++/guard.cc
+@@ -31,6 +31,7 @@
+ #include <ext/atomicity.h>
+ #include <ext/concurrence.h>
+ #include <bits/atomic_lockfree_defines.h>
++#define _GLIBCXX_HAVE_LINUX_FUTEX 1 // force-enable futex for global constructors
+ #if defined(__GTHREADS) && defined(__GTHREAD_HAS_COND) \
+   && (ATOMIC_INT_LOCK_FREE > 1) && defined(_GLIBCXX_HAVE_LINUX_FUTEX)
+ # include <climits>
+diff --git a/libstdc++-v3/src/c++11/thread.cc b/libstdc++-v3/src/c++11/thread.cc
+index 38c945668..a508ee9e8 100644
+--- a/libstdc++-v3/src/c++11/thread.cc
++++ b/libstdc++-v3/src/c++11/thread.cc
+@@ -29,6 +29,7 @@
+ #include <system_error>
+ #include <cerrno>
+ #include <cxxabi_forced.h>
++#include <cfibre.h>
+ 
+ #ifndef _GLIBCXX_USE_NANOSLEEP
+ # ifdef _GLIBCXX_HAVE_SLEEP
+@@ -212,7 +213,7 @@ namespace this_thread
+ 	static_cast<std::time_t>(__s.count()),
+ 	static_cast<long>(__ns.count())
+       };
+-    while (::nanosleep(&__ts, &__ts) == -1 && errno == EINTR)
++    while (::cfibre_nanosleep(&__ts, &__ts) == -1 && errno == EINTR)
+       { }
+ #elif defined(_GLIBCXX_HAVE_SLEEP)
+     const auto target = chrono::steady_clock::now() + __s + __ns;
+@@ -225,7 +226,7 @@ namespace this_thread
+ 	    long us = __ns.count() / 1000;
+ 	    if (us == 0)
+ 	      us = 1;
+-	    ::usleep(us);
++	    ::cfibre_usleep(us);
+ # else
+ 	    if (__ns.count() > 1000000 || secs == 0)
+ 	      ++secs; // No sub-second sleep function, so round up.
+@@ -235,7 +236,7 @@ namespace this_thread
+ 	if (secs > 0)
+ 	  {
+ 	    // Sleep in a loop to handle interruption by signals:
+-	    while ((secs = ::sleep(secs)))
++	    while ((secs = ::cfibre_sleep(secs)))
+ 	      { }
+ 	  }
+ 	const auto now = chrono::steady_clock::now();

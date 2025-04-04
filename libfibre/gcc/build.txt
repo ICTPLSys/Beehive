@@ -1,0 +1,61 @@
+LIBFIBRE=$HOME/work/fibre
+GCCDEST=$HOME/tmp/gcc
+GCCVER=12.2.0
+
+tar xaf gcc-$GCCVER.tar.xz
+patch -d gcc-$GCCVER -p1 < $LIBFIBRE/gcc/gcc-$GCCVER.patch
+cp $LIBFIBRE/gcc/gthr-fibre.h gcc-$GCCVER/libgcc
+cp $LIBFIBRE/src/libfibre/cfibre.h gcc-$GCCVER/libgcc
+cp $LIBFIBRE/src/libfibre/cfibre.h gcc-$GCCVER/libstdc++-v3/libsupc++
+
+mkdir build; cd build
+../gcc-$GCCVER/configure --prefix=$GCCDEST --enable-languages=c,c++\
+ --with-linker-hash-style=gnu --with-target-system-zlib=auto\
+ --enable-__cxa_atexit --enable-checking=release --enable-clocale=gnu\
+ --enable-default-pie --enable-default-ssp --enable-gnu-indirect-function\
+ --enable-install-libiberty --enable-linker-build-id --enable-threads=fibre\
+ --disable-libssp --disable-multilib --disable-linux-futex --disable-bootstrap
+
+# bootstrap: tools like 'genpreds' are built with bootstrap compiler missing libfibre
+
+# non-boostrap gcc build
+
+glibcxx_cv_PTHREADS_NUM_PROCESSORS_NP=no \
+glibcxx_cv_PTHREAD_COND_CLOCKWAIT=no \
+glibcxx_cv_PTHREAD_MUTEX_CLOCKLOCK=no \
+glibcxx_cv_PTHREAD_RWLOCK_CLOCKLOCK=no \
+nice -10 make -j $(nproc)
+
+make install
+
+# compile test programs
+
+LD_RUN_PATH=$GCCDEST/lib64:$LIBFIBRE/src $GCCDEST/bin/g++ -O3 \
+-I$LIBFIBRE/src/libfibre $LIBFIBRE/gcc/thread_test.cc \
+-L$LIBFIBRE/src -lfibre -lpthread
+
+LD_RUN_PATH=$GCCDEST/lib64:$LIBFIBRE/src $GCCDEST/bin/g++ -O3 \
+-I$LIBFIBRE/src/libfibre $LIBFIBRE/gcc/future_test.cc \
+-L$LIBFIBRE/src -lfibre -lpthread
+
+LD_RUN_PATH=$GCCDEST/lib64:$LIBFIBRE/src $GCCDEST/bin/g++ -O3 \
+-I$LIBFIBRE/src -I$LIBFIBRE/src/libfibre $LIBFIBRE/gcc/promise_test.cc \
+-L$LIBFIBRE/src -lfibre -lpthread
+
+LD_RUN_PATH=$GCCDEST/lib64:$LIBFIBRE/src $GCCDEST/bin/g++ -O3 \
+-I$LIBFIBRE/src -I$LIBFIBRE/src/libfibre $LIBFIBRE/gcc/exception_test.cc \
+-L$LIBFIBRE/src -lfibre -lpthread
+
+# partial build
+
+nice -10 make -j $(nproc) all-gcc
+
+make clean-target-libgcc
+nice -10 make -j $(nproc) all-target-libgcc
+make install-target-libgcc
+
+make clean-target-libstdc++-v3
+glibcxx_cv_PTHREADS_NUM_PROCESSORS_NP=no glibcxx_cv_PTHREAD_COND_CLOCKWAIT=no \
+glibcxx_cv_PTHREAD_MUTEX_CLOCKLOCK=no glibcxx_cv_PTHREAD_RWLOCK_CLOCKLOCK=no \
+nice -10 make -j $(nproc) all-target-libstdc++-v3
+make install-target-libstdc++-v3

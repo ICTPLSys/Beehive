@@ -1,0 +1,6 @@
+[submodule "src/errnoname"]
+	path = src/errnoname
+	url = https://github.com/mentalisttraceur/errnoname
+[submodule "apps/picohttpparser"]
+	path = apps/picohttpparser
+	url = https://github.com/h2o/picohttpparser.git

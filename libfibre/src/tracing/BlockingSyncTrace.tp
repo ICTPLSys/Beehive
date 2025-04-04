@@ -1,0 +1,9 @@
+LTTNG_UST_TRACEPOINT_EVENT(
+	BlockingSyncTrace, blocking,
+	LTTNG_UST_TP_ARGS(uintptr_t, cfibreptr, uintptr_t, queueptr, const char *, eventstr),
+	LTTNG_UST_TP_FIELDS(
+		lttng_ust_field_integer(uintptr_t, fibre_address, cfibreptr)
+		lttng_ust_field_integer(uintptr_t, queue_address, queueptr)
+		lttng_ust_field_string(event_string, eventstr)
+	)
+)

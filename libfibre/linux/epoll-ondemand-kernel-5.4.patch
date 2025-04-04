@@ -1,0 +1,151 @@
+diff --git a/fs/eventpoll.c b/fs/eventpoll.c
+index 339453ac8..a400c377a 100644
+--- a/fs/eventpoll.c
++++ b/fs/eventpoll.c
+@@ -88,7 +88,7 @@
+  */
+ 
+ /* Epoll private bits inside the event mask */
+-#define EP_PRIVATE_BITS (EPOLLWAKEUP | EPOLLONESHOT | EPOLLET | EPOLLEXCLUSIVE)
++#define EP_PRIVATE_BITS (EPOLLONDEMAND | EPOLLWAKEUP | EPOLLONESHOT | EPOLLET | EPOLLEXCLUSIVE)
+ 
+ #define EPOLLINOUT_BITS (EPOLLIN | EPOLLOUT)
+ 
+@@ -171,6 +171,9 @@ struct epitem {
+ 
+ 	/* The structure that describe the interested events and the source fd */
+ 	struct epoll_event event;
++
++	/* The stored fields for ep_modify_ondemand */
++	__poll_t ondemand_events;
+ };
+ 
+ /*
+@@ -1516,6 +1519,7 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
+ 	epi->ep = ep;
+ 	ep_set_ffd(&epi->ffd, tfile, fd);
+ 	epi->event = *event;
++	epi->ondemand_events = event->events; // before insertion into wait queue
+ 	epi->nwait = 0;
+ 	epi->next = EP_UNACTIVE_PTR;
+ 	if (epi->event.events & EPOLLWAKEUP) {
+@@ -1696,6 +1700,46 @@ static int ep_modify(struct eventpoll *ep, struct epitem *epi,
+ 	return 0;
+ }
+ 
++/*
++ * reactivate oneshot - similar to ep_modify, but without setting event.data
++ */
++int ep_modify_ondemand(wait_queue_entry_t *p, __poll_t skstate)
++{
++	struct epitem * epi = ep_item_from_wait(p);
++	struct eventpoll * ep = epi->ep;
++	int pwake = 0;
++
++	// want EPOLLONDEMAND and only EPOLLONDEMAND set
++	if ((epi->event.events & (~EP_PRIVATE_BITS | EPOLLONDEMAND)) != EPOLLONDEMAND) return 0;
++
++	lockdep_assert_irqs_disabled();
++
++	epi->event.events = epi->ondemand_events;
++
++	smp_mb();
++
++	if (skstate & epi->event.events) {
++		write_lock(&ep->lock); // IRQs already disabled
++		if (!ep_is_linked(epi)) {
++			list_add_tail(&epi->rdllink, &ep->rdllist);
++			ep_pm_stay_awake(epi);
++
++			/* Notify waiting tasks that events are available */
++			if (waitqueue_active(&ep->wq))
++				wake_up(&ep->wq);
++			if (waitqueue_active(&ep->poll_wait))
++				pwake++;
++		}
++		write_unlock(&ep->lock);
++	}
++
++	/* We have to call this outside the lock */
++	if (pwake)
++		ep_poll_safewake(&ep->poll_wait);
++
++	return 0;
++}
++
+ static __poll_t ep_send_events_proc(struct eventpoll *ep, struct list_head *head,
+ 			       void *priv)
+ {
+diff --git a/include/uapi/linux/eventpoll.h b/include/uapi/linux/eventpoll.h
+index 8a3432d0f..dae6e9c47 100644
+--- a/include/uapi/linux/eventpoll.h
++++ b/include/uapi/linux/eventpoll.h
+@@ -41,6 +41,9 @@
+ #define EPOLLMSG	(__force __poll_t)0x00000400
+ #define EPOLLRDHUP	(__force __poll_t)0x00002000
+ 
++/* Set on-demand reactivation of One Shot */
++#define EPOLLONDEMAND		((__force __poll_t)(1U << 24))
++
+ /* Set exclusive wakeup mode for the target file descriptor */
+ #define EPOLLEXCLUSIVE	((__force __poll_t)(1U << 28))
+ 
+diff --git a/net/socket.c b/net/socket.c
+index 94358566c..87446c248 100644
+--- a/net/socket.c
++++ b/net/socket.c
+@@ -865,12 +865,42 @@ INDIRECT_CALLABLE_DECLARE(int inet_recvmsg(struct socket *, struct msghdr *,
+ 					   size_t, int));
+ INDIRECT_CALLABLE_DECLARE(int inet6_recvmsg(struct socket *, struct msghdr *,
+ 					    size_t, int));
++
++extern int ep_modify_ondemand(wait_queue_entry_t *p, __poll_t skstate);
++
++static inline int sock_in_ondemand(struct socket *sock) {
++	struct sock *sk = sock->sk;
++	struct socket_wq *wq;
++	struct wait_queue_head *wq_head;
++	unsigned long flags;
++	wait_queue_entry_t *curr;
++
++	// mimic __wake_up_sync_key()
++	rcu_read_lock();
++	wq = rcu_dereference(sk->sk_wq);
++	if (skwq_has_sleeper(wq)) {
++		wq_head = &wq->wait;
++		spin_lock_irqsave(&wq_head->lock, flags); // mutual exclusion with add_wait_queue and remove_wait_queue
++		list_for_each_entry(curr, &wq_head->head, entry) {
++			ep_modify_ondemand(curr, sock->ops->poll(sock->file, sock, NULL));
++		}
++		spin_unlock_irqrestore(&wq_head->lock, flags);
++	}
++	rcu_read_unlock();
++	return 0;
++}
++
+ static inline int sock_recvmsg_nosec(struct socket *sock, struct msghdr *msg,
+ 				     int flags)
+ {
+-	return INDIRECT_CALL_INET(sock->ops->recvmsg, inet6_recvmsg,
++	int err = INDIRECT_CALL_INET(sock->ops->recvmsg, inet6_recvmsg,
+ 				  inet_recvmsg, sock, msg, msg_data_left(msg),
+ 				  flags);
++
++	if (err == -EAGAIN)
++		sock_in_ondemand(sock);
++
++	return err;
+ }
+ 
+ /**
+@@ -1741,6 +1771,10 @@ int __sys_accept4(int fd, struct sockaddr __user *upeer_sockaddr,
+ 		goto out_fd;
+ 
+ 	err = sock->ops->accept(sock, newsock, sock->file->f_flags, false);
++
++	if (err == -EAGAIN)
++		sock_in_ondemand(sock);
++
+ 	if (err < 0)
+ 		goto out_fd;
+ 

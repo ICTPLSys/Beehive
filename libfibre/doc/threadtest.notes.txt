@@ -1,0 +1,22 @@
+The values for locked and unlocked work are loop iterations.  When running
+with the -c flag, those values are interpreted as nanoseconds and the
+program attempts to determine the corresponding number of loop iterations.
+
+When running with the -r flag each loop iteration count is determined
+randomly between 0 and the specific work value.
+
+For lock correctness, the program checks that the total number of loop
+iterations counted per fibre is the same as the total number of iterations
+per loop.  Small and random work loops should result in sufficient stress on
+locks.
+
+The standard deviation for the average number of loop iterations per lock
+should be 0, otherwise there is some kind of imbalance between locks?
+
+If the standard deviation for the average number of loop iteratios per fibre
+is high, this shows reduced fairness between fibres.  Especially for a short
+unlocked work loop and a small lock count, a lock holder might re-acquire
+the same lock successively.  This should also be visible in the runtime
+systems's 'Processor' stats as low scheduling activity.  Another indication
+for unfairness are failed attempts to acquire a lock due to timeout (on
+those platforms that support timeouts) even with a generous timeout period.

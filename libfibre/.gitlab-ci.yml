@@ -1,0 +1,14 @@
+stages:
+  - test
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+test1:
+  stage: test
+  before_script:
+    - "git clone https://git.uwaterloo.ca/mkarsten/memcached-1.6.9-libfibre.git memcached"
+  script:
+    - "./.gitlab-testrun.sh"
+  after_script:
+    - "echo DONE"
