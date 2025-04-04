@@ -2,7 +2,7 @@
 
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace signal {
 
@@ -40,4 +40,4 @@ SignalManager::~SignalManager() {}
 
 }  // namespace signal
 
-}  // namespace Beehive
+}  // namespace FarLib

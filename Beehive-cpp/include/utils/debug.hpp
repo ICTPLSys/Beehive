@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 
-namespace Beehive {
+namespace FarLib {
 
 namespace debug {
 
@@ -38,15 +38,15 @@ inline void info(const char *msg) { std::cout << "INFO: " << msg << std::endl; }
 
 }  // namespace debug
 
-}  // namespace Beehive
+}  // namespace FarLib
 
-#define TODO(MSG) Beehive::debug::todo(MSG)
-#define ERROR(MSG) Beehive::debug::error(MSG)
-#define WARN(MSG) Beehive::debug::warn(MSG)
-#define INFO(MSG) Beehive::debug::info(MSG)
-#define CHECK_ERR(X) Beehive::debug::check_err(X, #X)
+#define TODO(MSG) FarLib::debug::todo(MSG)
+#define ERROR(MSG) FarLib::debug::error(MSG)
+#define WARN(MSG) FarLib::debug::warn(MSG)
+#define INFO(MSG) FarLib::debug::info(MSG)
+#define CHECK_ERR(X) FarLib::debug::check_err(X, #X)
 #define DEBUG_ASSERT assert
 #define ASSERT(X)         \
     (static_cast<bool>(X) \
          ? void(0)        \
-         : Beehive::debug::assert_fail(#X, __FILE__, __LINE__, __func__))
+         : FarLib::debug::assert_fail(#X, __FILE__, __LINE__, __func__))

@@ -9,7 +9,7 @@
 #include "cache/handler.hpp"
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace allocator {
 constexpr size_t BlockHeadSize = 16;
@@ -68,14 +68,14 @@ class Accessor;
 
 #define ON_MISS_BEGIN_X                   \
     auto &__last_on_miss__ = __on_miss__; \
-    auto __on_miss__ = Beehive::cache::DataMissHandlerImpl([&](auto __entry__, auto __ddl__) {
-#define ON_MISS_END_X                                            \
-    if (Beehive::cache::check_fetch(__entry__, __ddl__)) return; \
-    __last_on_miss__(__entry__, __ddl__);                        \
+    auto __on_miss__ = FarLib::cache::DataMissHandlerImpl([&](auto __entry__, auto __ddl__) {
+#define ON_MISS_END_X                                           \
+    if (FarLib::cache::check_fetch(__entry__, __ddl__)) return; \
+    __last_on_miss__(__entry__, __ddl__);                       \
     });
 
 #define ON_MISS_BEGIN \
-    auto __on_miss__ = Beehive::cache::DataMissHandlerImpl([&](auto __entry__, auto __ddl__) {
+    auto __on_miss__ = FarLib::cache::DataMissHandlerImpl([&](auto __entry__, auto __ddl__) {
 #define ON_MISS_END \
     });
 
@@ -455,4 +455,4 @@ inline LiteAccessor<void, true> alloc_uninitialized(size_t size,
     return LiteAccessor<void, true>::allocate(size, scope);
 }
 
-}  // namespace Beehive
+}  // namespace FarLib

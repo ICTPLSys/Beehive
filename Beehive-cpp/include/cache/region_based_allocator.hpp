@@ -10,7 +10,7 @@
 #include "cache/object.hpp"
 #include "utils/debug.hpp"
 #include "utils/stats.hpp"
-namespace Beehive {
+namespace FarLib {
 
 namespace allocator {
 
@@ -470,4 +470,4 @@ constexpr size_t BlockHeadSize = sizeof(BlockHead);
 
 }  // namespace allocator
 
-}  // namespace Beehive
+}  // namespace FarLib

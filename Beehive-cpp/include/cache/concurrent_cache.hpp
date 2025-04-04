@@ -11,12 +11,6 @@
 #include <memory>
 #include <string>
 
-#include "async/select_schedule.hpp"
-#include "utils/control.hpp"
-#include "utils/uthreads.hpp"
-#ifndef NEW_SCHEDULE
-#include "async/async.hpp"
-#endif
 #include "cache/entry.hpp"
 #include "cache/handler.hpp"
 #include "cache/object.hpp"
@@ -24,23 +18,15 @@
 #include "rdma/client.hpp"
 #include "region_based_allocator.hpp"
 #include "remote_allocator.hpp"
+#include "utils/control.hpp"
 #include "utils/debug.hpp"
 #include "utils/fork_join.hpp"
 #include "utils/signal.hpp"
 #include "utils/stats.hpp"
+#include "utils/uthreads.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace cache {
-// put it at the top of namespace cache for compatibility
-enum FetchState {
-    FETCH_PRESENT,
-    FETCH_ENQUEUE,
-    FETCH_WAITING,
-    FETCH_QUEUE_FULL,
-    FETCH_CACHE_FULL,
-    FETCH_INVALID
-};
-
 class ConcurrentArrayCache {
     friend class DereferenceScope;
 
@@ -66,57 +52,17 @@ private:
     template <typename T>
     friend class UniqueFarPtr;
 
-public:
-    // a dereference scope should be derived from DefaultEvictor
-    // providing `begin_eviction` and `end_eviction`
-    // to pin its objects at local
-    struct DefaultEvictor {
-        void begin_eviction() {
-#ifdef ASSERT_ALL_LOCAL
-            ERROR("should not evict in begin eviction");
-#endif
-        }
-        void end_eviction() {}
-        DereferenceScope *as_scope() { return nullptr; }
-    };
-
-    void force_evict() {
-        uint64_t timestamp = 0;
-        std::function<void(size_t)> fn_mark = [this, &timestamp](size_t) {
-            mark_phase(timestamp);
-        };
-        std::function<void(size_t)> fn_evacuate = [this, &timestamp](size_t) {
-            evacuate_phase(timestamp);
-        };
-        std::function<void(size_t)> fn_gc = [this, &timestamp](size_t) {
-            gc_phase(timestamp);
-        };
-        profile::count_evacuation();
-        uthread::fork_join(evacuate_thread_cnt, fn_mark);
-        flip_scope_state();
-        uthread::fork_join(evacuate_thread_cnt, fn_evacuate);
-        uthread::fork_join(evacuate_thread_cnt, fn_gc);
-        mutator_can_not_allocate.store(false);
-    }
-
-    void flush() {
-        for (size_t i = 0; i < 4 * 4; i++) {
-            force_evict();
-        }
-    }
-
 private:
-    template <typename Evictor>
-    void *allocate_local(size_t size, far_obj_t obj, Evictor &&evictor) {
+    void *allocate_local(size_t size, far_obj_t obj, DereferenceScope &scope) {
         allocator::BlockHead *block =
-            allocator::thread_local_allocate(size, obj, evictor.as_scope());
+            allocator::thread_local_allocate(size, obj, &scope);
         if (block == nullptr) [[unlikely]] {
-            // can not allocate, evict
+                // can not allocate, evict
 #ifdef ASSERT_ALL_LOCAL
-            ERROR("should not evict in allocate local");
+                ERROR("should not evict in allocate local");
 #endif
             bool suspended = profile::suspend_work();
-            evictor.begin_eviction();
+            scope.begin_eviction();
             size_t retry_count = 0;
             do {
                 on_demand_invoke_eviction();
@@ -125,7 +71,7 @@ private:
                     ERROR("can not allocate!");
                 }
             } while (block == nullptr);
-            evictor.end_eviction();
+            scope.end_eviction();
             profile::resume_work(suspended);
         }
         assert(obj == block->obj_meta_data);
@@ -318,12 +264,12 @@ private:
             }
             profile::count_evacuation();
             timestamp++;
-            uthread::fork_join(evacuate_thread_cnt, fn_mark);
+            uthread::fork_join<true>(evacuate_thread_cnt, fn_mark);
             flip_scope_state();
             timestamp++;
-            uthread::fork_join(evacuate_thread_cnt, fn_evacuate);
+            uthread::fork_join<true>(evacuate_thread_cnt, fn_evacuate);
             timestamp++;
-            uthread::fork_join(evacuate_thread_cnt, fn_gc);
+            uthread::fork_join<true>(evacuate_thread_cnt, fn_gc);
             mutator_can_not_allocate.store(false);
         }
     }
@@ -379,10 +325,11 @@ private:
     void on_demand_invoke_eviction() {
         assert(uthread::get_tls()->scope_state == OutOfScope);
         uthread::lock(&eviction_mutex);
+        uthread::set_high_priority();
         mutator_can_not_allocate.store(true);
         uthread::notify_all_locked(&eviction_cond);
         uthread::wait_locked(&mutator_cond, &eviction_mutex);
-        // printf("mutator %p out on demand eviction\n", fibre_self());
+        uthread::set_default_priority();
     }
 
     void deallocate_local(void *ptr, FarObjectEntry &entry) {
@@ -393,8 +340,8 @@ private:
     }
 
     // return true if already at local
-    template <bool IncreaseRefCount, typename Evictor>
-    bool post_fetch(far_obj_t obj, Evictor &&evictor) {
+    template <bool IncreaseRefCount>
+    bool post_fetch(far_obj_t obj, DereferenceScope &scope) {
         auto &entry = get_entry_of(obj);
     retry:
         auto old_state = entry.load_state();
@@ -421,8 +368,7 @@ private:
         case REMOTE: {
             // 1st: allocate local memory, trigger evacuation on memory low
             signal::disable_signal();
-            void *local_ptr =
-                allocate_local(obj.size, obj, std::forward<Evictor>(evictor));
+            void *local_ptr = allocate_local(obj.size, obj, scope);
             // 2nd: modify state to prevent object to be evacuated
             new_state.state = FETCHING;
             if (!entry.cas_state_weak(old_state, new_state)) {
@@ -452,87 +398,20 @@ private:
         return state.is_deref_fast_path<Mut>();
     }
 
-    template <bool Mut, typename Evictor>
-    bool post_fetch_lite(far_obj_t obj, Evictor &&evictor) {
+    template <bool Mut>
+    bool post_fetch_lite(far_obj_t obj, DereferenceScope &scope) {
         auto &entry = get_entry_of(obj);
         auto old_state = entry.load_state(std::memory_order::relaxed);
         if (fetch_lite_fast_path<Mut>(old_state)) [[likely]] {
             assert(entry.local_addr() != nullptr);
             return true;
         }
-        return post_fetch_lite_slow_path<Mut>(entry, obj,
-                                              std::forward<Evictor>(evictor));
+        return post_fetch_lite_slow_path<Mut>(entry, obj, scope);
     }
-
-    template <bool Mut, typename Evictor>
-    FetchState post_fetch_lite_prefetch(far_obj_t obj, Evictor &&evictor) {
-        auto &entry = get_entry_of(obj);
-        auto old_state = entry.load_state(std::memory_order::relaxed);
-        if (fetch_lite_fast_path<Mut>(old_state)) [[likely]] {
-            assert(entry.local_addr() != nullptr);
-            return FetchState::FETCH_PRESENT;
-        }
-        return post_fetch_lite_slow_path_prefetch<Mut>(
-            entry, obj, std::forward<Evictor>(evictor));
-    }
-
-    template <bool Mut, typename Evictor>
-    FetchState post_fetch_lite_slow_path_prefetch(FarObjectEntry &entry,
-                                                  far_obj_t obj,
-                                                  Evictor &&evictor) {
-        auto old_state = entry.load_state(std::memory_order::relaxed);
-    retry:
-        auto new_state = old_state;
-        if constexpr (Mut) {
-            new_state.dirty = true;
-        }
-        new_state.inc_hotness();
-        switch (new_state.state) {
-        case LOCAL:
-            if (!entry.cas_state_weak(old_state, new_state)) goto retry;
-            return FETCH_PRESENT;
-        case FETCHING:
-            if (!entry.cas_state_weak(old_state, new_state)) goto retry;
-            // TODO: this thread should check if memory is low
-            // otherwise, since this thread is blocked
-            // it may be busy polling and never exit its scope
-            return FETCH_WAITING;
-        case MARKED:
-        case EVICTING:
-            new_state.state = LOCAL;
-            if (!entry.cas_state_weak(old_state, new_state)) goto retry;
-            assert(entry.local_addr());
-            return FETCH_ENQUEUE;
-        case REMOTE: {
-            signal::disable_signal();
-
-            void *local_ptr =
-                allocate_local(obj.size, obj, std::forward<Evictor>(evictor));
-            new_state.state = FETCHING;
-            if (!entry.cas_state_weak(old_state, new_state)) {
-                deallocate_local(local_ptr, entry);
-                signal::enable_signal();
-                goto retry;
-            }
-            assert(local_ptr != nullptr);
-            entry.set_local_addr(local_ptr);
-            assert(entry.local_addr());
-            post_read_request(obj);
-            signal::enable_signal();
-            return FETCH_ENQUEUE;
-        }
-        case BUSY:
-            goto retry;
-        case FREE:
-            return FETCH_PRESENT;
-        default:
-            ERROR("invalid entry state when fetching");
-        }
-    }
-
-    template <bool Mut, typename Evictor>
+    
+    template <bool Mut>
     bool post_fetch_lite_slow_path(FarObjectEntry &entry, far_obj_t obj,
-                                   Evictor &&evictor) {
+                                   DereferenceScope &scope) {
         auto old_state = entry.load_state(std::memory_order::relaxed);
     retry:
         auto new_state = old_state;
@@ -559,8 +438,7 @@ private:
         case REMOTE: {
             signal::disable_signal();
 
-            void *local_ptr =
-                allocate_local(obj.size, obj, std::forward<Evictor>(evictor));
+            void *local_ptr = allocate_local(obj.size, obj, scope);
             new_state.state = FETCHING;
             if (!entry.cas_state_weak(old_state, new_state)) {
                 deallocate_local(local_ptr, entry);
@@ -587,7 +465,8 @@ private:
     void deallocate(FarObjectEntry &entry, size_t size) {
     retry_load:
         auto old_state = entry.load_state();
-        if (!OldAccessor && old_state.ref_cnt != 0) {
+        if (old_state.ref_cnt != 0) {
+            check_cq();
             uthread::yield();
             check_cq();
             goto retry_load;
@@ -691,28 +570,25 @@ public:
 
     static void destroy_default() { default_instance.reset(); }
 
-    template <bool Lite = false, typename Evictor = DefaultEvictor>
+    template <bool Lite = false>
     std::pair<far_obj_t, void *> allocate(FarObjectEntry *entry, size_t size,
-                                          bool dirty, Evictor &&evictor = {}) {
+                                          bool dirty, DereferenceScope &scope) {
         far_obj_t obj = {.size = size,
                          .obj_id = reinterpret_cast<uint64_t>(entry)};
-        void *local_ptr =
-            allocate_local(size, obj, std::forward<Evictor>(evictor));
+        void *local_ptr = allocate_local(size, obj, scope);
         auto remote_ptr = allocate_remote(size);
         entry->reset<Lite>(local_ptr, remote_ptr, size, dirty);
         return {obj, local_ptr};
     }
 
-    template <bool Lite = false, typename Evictor = DefaultEvictor>
+    template <bool Lite = false>
     std::pair<far_obj_t, void *> allocate(size_t size, bool dirty,
-                                          Evictor &&evictor = {}) {
-        FarObjectEntry *entry = allocate_entry(std::forward<Evictor>(evictor));
-        return allocate<Lite>(entry, size, dirty,
-                              std::forward<Evictor>(evictor));
+                                          DereferenceScope &scope) {
+        FarObjectEntry *entry = allocate_entry(scope);
+        return allocate<Lite>(entry, size, dirty, scope);
     }
 
-    template <typename Evictor>
-    FarObjectEntry *allocate_entry(Evictor &&evictor) {
+    FarObjectEntry *allocate_entry(DereferenceScope &scope) {
         return new FarObjectEntry;
     }
 
@@ -731,27 +607,23 @@ public:
         return obj.is_null() || get_entry_of(obj).is_local();
     }
 
-    template <typename Evictor = DefaultEvictor>
-    std::pair<bool, void *> async_fetch(far_obj_t obj, Evictor &&evictor = {}) {
-        bool at_local = post_fetch<true>(obj, std::forward<Evictor>(evictor));
+    std::pair<bool, void *> async_fetch(far_obj_t obj,
+                                        DereferenceScope &scope) {
+        bool at_local = post_fetch<true>(obj, scope);
         return {at_local, get_entry_of(obj).local_addr()};
     }
 
-    template <typename Evictor = DefaultEvictor>
-    FetchState prefetch(far_obj_t obj, Evictor &&evictor = {}) {
+    bool prefetch(far_obj_t obj, DereferenceScope &scope) {
         profile::start_prefetch();
-        auto ret = post_fetch_lite_prefetch<false>(
-            obj, std::forward<Evictor>(evictor));
+        bool at_local = post_fetch<false>(obj, scope);
         profile::end_prefetch();
-        return ret;
+        return at_local;
     }
 
-    template <typename Evictor = DefaultEvictor>
-    void *sync_fetch(far_obj_t obj, Evictor &&evictor = {}) {
+    void *sync_fetch(far_obj_t obj, DereferenceScope &scope) {
         ON_MISS_BEGIN
         ON_MISS_END
-        return fetch_with_miss_handler(obj, __on_miss__,
-                                       std::forward<Evictor>(evictor));
+        return fetch_with_miss_handler(obj, __on_miss__, scope);
     }
 
     bool check_fetch(FarObjectEntry *entry, fetch_ddl_t &ddl) {
@@ -765,24 +637,14 @@ public:
         return false;
     }
 
-    template <typename Evictor = DefaultEvictor>
     void *fetch_with_miss_handler(far_obj_t obj, const DataMissHandler &handler,
-                                  Evictor &&evictor = {}) {
+                                  DereferenceScope &scope) {
         bool work_suspended = profile::suspend_work();
-        bool at_local = post_fetch<true>(obj, std::forward<Evictor>(evictor));
+        bool at_local = post_fetch<true>(obj, scope);
         auto entry = &get_entry_of(obj);
         if (!at_local) [[unlikely]] {
             fetch_ddl_t ddl = create_fetch_ddl();
-#ifndef NEW_SCHEDULE
-            while (async::out_of_order_task) [[unlikely]] {
-                async::out_of_order_task->blocked_entry = entry;
-                async::out_of_order_task->yield(async::FETCH);
-                if (check_fetch(entry, ddl)) {
-                    goto back;
-                }
-            }
-#endif
-            // profile::resume_work(work_suspended);
+            profile::resume_work(work_suspended);
             handler(entry, ddl);
             // work_suspended = profile::suspend_work();
             profile::start_poll();
@@ -797,38 +659,26 @@ public:
     }
 
     // do not pin object, to reduce CAS
-    template <bool Mut, typename Evictor = DefaultEvictor>
+    template <bool Mut>
     void *fetch_lite(far_obj_t obj, const DataMissHandler &handler,
-                     Evictor &&evictor = {}) {
-        profile::count_deref();
+                     DereferenceScope &scope) {
         auto entry = &get_entry_of(obj);
         auto state = entry->load_state(std::memory_order::relaxed);
         if (fetch_lite_fast_path<Mut>(state)) [[likely]] {
             return entry->local_addr();
         }
-        return fetch_lite_slow_path<Mut, Evictor>(
-            obj, handler, std::forward<Evictor>(evictor));
+        return fetch_lite_slow_path<Mut>(obj, handler, scope);
     }
 
-    template <bool Mut, typename Evictor = DefaultEvictor>
+    template <bool Mut>
     void *fetch_lite_slow_path(far_obj_t obj, const DataMissHandler &handler,
-                               Evictor &&evictor = {}) {
+                               DereferenceScope &scope) {
         bool work_suspended = profile::suspend_work();
         auto entry = &get_entry_of(obj);
-        bool at_local = post_fetch_lite_slow_path<Mut>(
-            *entry, obj, std::forward<Evictor>(evictor));
+        bool at_local = post_fetch_lite_slow_path<Mut>(*entry, obj, scope);
         if (!at_local) [[unlikely]] {
             fetch_ddl_t ddl = create_fetch_ddl();
-#ifndef NEW_SCHEDULE
-            while (async::out_of_order_task) [[unlikely]] {
-                async::out_of_order_task->blocked_entry = entry;
-                async::out_of_order_task->yield(async::FETCH);
-                if (check_fetch(entry, ddl)) {
-                    goto back;
-                }
-            }
-#endif
-            // profile::resume_work(work_suspended);
+            profile::resume_work(work_suspended);
             handler(entry, ddl);
             // work_suspended = profile::suspend_work();
             profile::start_poll();
@@ -842,10 +692,10 @@ public:
         return entry->local_addr();
     }
 
-    template <bool Mut, typename Evictor>
-    std::pair<bool, void *> async_fetch_lite(far_obj_t obj, Evictor &&evictor) {
-        bool at_local =
-            post_fetch_lite<Mut>(obj, std::forward<Evictor>(evictor));
+    template <bool Mut>
+    std::pair<bool, void *> async_fetch_lite(far_obj_t obj,
+                                             DereferenceScope &scope) {
+        bool at_local = post_fetch_lite<Mut>(obj, scope);
         return {at_local, get_entry_of(obj).local_addr()};
     }
 
@@ -996,6 +846,7 @@ private:
         }
     }
 
+public:
     bool memory_low() {
         return mutator_can_not_allocate.load() ||
                allocator::global_heap.memory_low();
@@ -1003,11 +854,10 @@ private:
 
 public:
     size_t check_cq() {
-        if (flag.test() || flag.test_and_set()) {
-            profile::count_check_cq_failed();
+        static std::atomic_flag ttas_lock = 0;
+        if (ttas_lock.test() || ttas_lock.test_and_set()) {
             return 0;
         }
-        profile::count_check_cq_success();
         auto client = rdma::Client::get_default();
         ibv_wc wc[rdma::CHECK_CQ_BATCH_SIZE];
         profile::start_check_cq();
@@ -1016,16 +866,15 @@ public:
         for (size_t i = 0; i < cnt; i++) {
             handle_work_complete(wc[i]);
         }
-        flag.clear();
+        ttas_lock.clear();
         return cnt;
     }
 
-    void check_memory_low() {
+    void check_memory_low(auto &&scope) {
         if (memory_low()) {
-            uthread::lock(&eviction_mutex);
-            mutator_can_not_allocate.store(true);
-            uthread::notify_all_locked(&eviction_cond);
-            uthread::unlock(&eviction_mutex);
+            scope.begin_eviction();
+            on_demand_invoke_eviction();
+            scope.end_eviction();
         }
     }
 
@@ -1042,4 +891,4 @@ public:
 
 }  // namespace cache
 
-}  // namespace Beehive
+}  // namespace FarLib

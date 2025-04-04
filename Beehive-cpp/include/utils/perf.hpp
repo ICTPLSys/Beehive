@@ -10,7 +10,7 @@ extern "C" {
 #include "utils/debug.hpp"
 #include "utils/uthreads.hpp"
 
-namespace Beehive {
+namespace FarLib {
 // this value may modified when kernel changed.
 static constexpr size_t TID_OFFS = 0x2d0;
 static constexpr bool RESULT_PER_TH = false;
@@ -21,6 +21,7 @@ struct pthread_fake {
 struct PerfResult {
     double runtime_ms;
     size_t total_cycles;
+    size_t instructions;
     size_t l2_cache_miss;
     size_t l3_cache_miss;
 
@@ -32,20 +33,19 @@ struct PerfResult {
                   << runtime_ms << " ms" << std::endl;
         std::cout << std::setw(16) << "cycles: " << std::setw(16)
                   << total_cycles << std::endl;
+        std::cout << std::setw(16) << "Insttructions: " << std::setw(16)
+                  << instructions << std::endl;
         std::cout << std::setw(16) << "L2 miss: " << std::setw(16)
                   << l2_cache_miss << std::endl;
         std::cout << std::setw(16) << "L3 miss: " << std::setw(16)
                   << l3_cache_miss << std::endl;
-        std::cout << std::setw(16)
-                  << "runtime ms from cycles: " << std::setw(16)
-                  << static_cast<double>(total_cycles) / 2.8 / 1e6 << std::endl;
     }
 };
 
 template <typename Fn>
 PerfResult perf_profile(Fn&& fn) {
     constexpr size_t PAPIEventCount = 3;
-    int papi_events[PAPIEventCount] = {PAPI_TOT_CYC, PAPI_L2_TCM, PAPI_L3_TCM};
+    int papi_events[PAPIEventCount] = {PAPI_TOT_INS, PAPI_L2_TCM, PAPI_L3_TCM};
     std::vector<int> events;
     long long papi_values[PAPIEventCount] = {0};
     size_t worker_num = uthread::get_worker_count();
@@ -82,7 +82,7 @@ PerfResult perf_profile(Fn&& fn) {
         }
         if constexpr (RESULT_PER_TH) {
             PerfResult result;
-            result.total_cycles = th_values[0];
+            result.instructions = th_values[0];
             result.l2_cache_miss = th_values[1];
             result.l3_cache_miss = th_values[2];
             std::cout << "-------------------" << std::endl;
@@ -95,7 +95,8 @@ PerfResult perf_profile(Fn&& fn) {
 
     PerfResult result;
     result.runtime_ms = duration.count();
-    result.total_cycles = papi_values[0];
+    result.total_cycles = end_cycles - start_cycles;
+    result.instructions = papi_values[0];
     result.l2_cache_miss = papi_values[1];
     result.l3_cache_miss = papi_values[2];
     return result;
@@ -105,4 +106,4 @@ inline void perf_init() {
     ASSERT(PAPI_library_init(PAPI_VER_CURRENT) == PAPI_VER_CURRENT);
 }
 
-}  // namespace Beehive
+}  // namespace FarLib

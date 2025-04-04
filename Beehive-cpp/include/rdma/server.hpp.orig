@@ -7,7 +7,7 @@
 #include "rdma/exchange_msg.hpp"
 #include "rdma/rdma.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace rdma {
 
 class Server {
@@ -26,7 +26,7 @@ private:
 public:
     Server(const Configure &config) : 
         config(config),
-        buffer(std::aligned_alloc(Beehive::PAGE_SIZE, config.server_buffer_size)), 
+        buffer(std::aligned_alloc(FarLib::PAGE_SIZE, config.server_buffer_size)), 
         ctx(), 
         pd(ctx),
         mr(pd, buffer, config.server_buffer_size), 
@@ -122,4 +122,4 @@ public:
 };
 
 }  // namespace rdma
-}  // namespace Beehive
+}  // namespace FarLib

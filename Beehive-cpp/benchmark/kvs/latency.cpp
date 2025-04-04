@@ -1,5 +1,6 @@
 #include <hdr/hdr_histogram.h>
 
+#include <atomic>
 #include <boost/lockfree/queue.hpp>
 #include <boost/lockfree/spsc_queue.hpp>
 #include <boost/timer/progress_display.hpp>
@@ -17,22 +18,19 @@
 #include "test/fixed_size_string.hpp"
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
-#include "utils/parallel.hpp"
 #include "utils/perf.hpp"
 #include "utils/stats.hpp"
 #include "utils/threads.hpp"
 #include "utils/zipfian.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 #define DISPLAY_PROGRESS
 
 using str_key_t = FixedSizeString<32>;
 using str_value_t = FixedSizeString<256>;
-
-size_t MaxQueueTime = 1'000'000'000;  // ns
 
 using LocalHashTable = std::unordered_map<str_key_t, str_value_t>;
 using RemoteHashTable = ConcurrentHashMap<str_key_t, str_value_t>;
@@ -66,10 +64,11 @@ public:
         std::chrono::nanoseconds op_speed_reset;
     };
 
-    static constexpr size_t RequestCount = 10 * 1024 * 1024;
-    static constexpr size_t DataSizeShift = 25;
+    // 10GB
+    static constexpr size_t InitialDataCount = 32 * 1024 * 1024;
+    static constexpr size_t DataSizeShift = 27;
     static constexpr size_t DataSize = 1 << DataSizeShift;
-    static_assert(RequestCount < DataSize);
+    static_assert(InitialDataCount < DataSize);
 
 public:
     Workload() : remote_hash_table(DataSizeShift + 2) { init_data(); }
@@ -82,19 +81,18 @@ public:
 
 private:
     void init_data() {
-        data.reserve(RequestCount);
-        local_hash_table.reserve(RequestCount);
+        data.reserve(InitialDataCount);
+        local_hash_table.reserve(InitialDataCount);
 #ifdef DISPLAY_PROGRESS
         std::cout << "Loading Data..." << std::endl;
-        boost::timer::progress_display progress(RequestCount);
+        boost::timer::progress_display progress(InitialDataCount);
 #endif
         RootDereferenceScope scope;
-        for (size_t i = 0; i < RequestCount; i++) {
+        for (size_t i = 0; i < InitialDataCount; i++) {
             str_key_t key = str_key_t::random();
             str_value_t value = str_value_t::random();
             ASSERT(remote_hash_table.put(key, value, scope));
             data.push_back({key, value});
-            local_hash_table[key] = value;
 #ifdef DISPLAY_PROGRESS
             ++progress;
 #endif
@@ -107,7 +105,7 @@ private:
     RemoteHashTable remote_hash_table;
 };
 
-constexpr size_t NQueue = 4;
+constexpr size_t NQueue = 16;
 
 class Server {
 public:
@@ -152,6 +150,10 @@ public:
         };
     }
 
+    void print_cdf() {
+        hdr_percentiles_print(hist_serve, stdout, 100, 1, format_type::CLASSIC);
+    }
+
 public:
     Server() : serving(true) {
         int err;
@@ -183,8 +185,6 @@ protected:
     bool get_request(size_t qi, Workload::Request*& request,
                      Workload::Response& response) {
         while (request_queue[qi].pop(request)) {
-            if (request->request_start_ns + MaxQueueTime < get_time_ns())
-                continue;
             response.in_queue_lat_ns =
                 get_time_ns() - request->request_start_ns;
             return true;
@@ -216,42 +216,6 @@ public:
             }
         }
     }
-};
-
-class LocalServer : public Server {
-public:
-    LocalServer(Workload& workload) {
-        hash_table = workload.get_local_hash_table();
-    }
-
-    void serve(size_t qi) override {
-        while (is_serving()) {
-            Workload::Request* request;
-            Workload::Response response;
-            if (get_request(qi, request, response)) {
-                switch (request->op_type) {
-                case Workload::GET: {
-                    auto it = hash_table->find(request->key);
-                    ASSERT(it == hash_table->end() ||
-                           it->second == request->value);
-                    break;
-                }
-                case Workload::PUT: {
-                    hash_table->insert_or_assign(request->key, request->value);
-                    break;
-                }
-                case Workload::REMOVE: {
-                    hash_table->erase(request->key);
-                    break;
-                }
-                }
-                send_response(request, response);
-            }
-        }
-    }
-
-protected:
-    LocalHashTable* hash_table;
 };
 
 class RemotableServer : public Server {
@@ -517,7 +481,7 @@ uint64_t Workload::gen_requests(Server& server, const Config& config,
     std::default_random_engine random_engine(std::random_device{}());
     std::exponential_distribution req_interval_dist(1.0 / op_duration_ns);
     std::uniform_real_distribution<float> op_type_dist(0.0, 1.0);
-    ZipfianGenerator<false> idx_generator(RequestCount,
+    ZipfianGenerator<false> idx_generator(InitialDataCount,
                                           config.zipfian_constant);
     uint64_t period_start_time = get_time_ns();
     uint64_t final_deadline = period_start_time + max_runtime_ns;
@@ -569,7 +533,7 @@ const char* const ColumnNames[] = {
 constexpr size_t ColumnWidth = 12;
 constexpr size_t ColumnCount = sizeof(ColumnNames) / sizeof(*ColumnNames);
 
-bool run(const char* name, Server* server, Workload* workload,
+void run(const char* name, Server* server, Workload* workload,
          const Workload::Config& config) {
     void (*serve_fn)(std::pair<Server*, size_t>*) =
         [](std::pair<Server*, size_t>* args) {
@@ -594,8 +558,6 @@ bool run(const char* name, Server* server, Workload* workload,
     }
     double run_time = (double)(end_ns - start_ns) / 1e9;
     auto stats = server->get_stats();
-    // if (stats.s_p99 <= MaxQueueTime) {
-    std::cout << std::setw(ColumnWidth) << MaxQueueTime;
     std::cout << std::setw(ColumnWidth) << config.op_duration.count();
     std::cout << std::setw(ColumnWidth) << run_time;
     std::cout << std::setw(ColumnWidth) << req_count;
@@ -611,8 +573,7 @@ bool run(const char* name, Server* server, Workload* workload,
     std::cout << std::setw(ColumnWidth) << stats.s_p95;
     std::cout << std::setw(ColumnWidth) << stats.s_p99;
     std::cout << std::endl;
-    // }
-    return stats.s_p99 <= MaxQueueTime;
+    server->print_cdf();
 }
 
 void run(size_t n_server_core) {
@@ -625,18 +586,20 @@ void run(size_t n_server_core) {
 
     Workload::Config config{
         .n_server_core = n_server_core,
-        .put_ratio = 0.05,
-        .remove_ratio = 0.05,
-        .zipfian_constant = 0.5,
+        .put_ratio = 0.5,
+        .remove_ratio = 0.0,
+        .zipfian_constant = 0.99,
         .max_request_count = 20'000'000,
         .max_runtime = 10s,
-        .op_duration = 1us,
+        .op_duration = 10ns,
         .op_speed_reset = 100ms,
     };
-    constexpr std::chrono::nanoseconds GoalLatency[] = {
-        400us, 350us, 300us, 250us, 200us, 150us, 100us, 90us, 80us,
-        70us,  60us,  50us,  45us,  40us,  35us,  30us,  25us, 20us,
-        15us,  10us,  9us,   8us,   7us,   6us,   5us,   4us};
+    const std::chrono::duration<double, std::nano> OpDurations[] = {
+        3.2us
+        // 16.0us, 8.0us, 5.3us, 4.0us, 3.2us, 2.7us, 2.3us, 2.0us
+        // 2.0us,
+        // 1.8us, 1.7us, 1.5us, 1.3us
+    };
 
 #define RUN(NAME, SERVER)                      \
     {                                          \
@@ -647,48 +610,29 @@ void run(size_t n_server_core) {
     // warm up
     RUN("proutine", PararoutineServer);
 
-    {
-        PararoutineServer server(workload);
+    // {
+    //     PararoutineServer server(workload);
+    //     profile::reset_all();
+    //     profile::start_work();
+    //     run("proutine", &server, &workload, config);
+    //     profile::end_work();
+    //     profile::print_profile_data();
+    // }
+    // return;
+
+    for (auto op_duration : OpDurations) {
+        config.op_duration =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(op_duration);
+
         profile::reset_all();
-        profile::start_work();
-        run("proutine", &server, &workload, config);
-        profile::end_work();
+        perf_profile([&] {
+            profile::start_work();
+            profile::thread_start_work();
+            RUN("proutine", PararoutineServer);
+            profile::thread_end_work();
+            profile::end_work();
+        }).print();
         profile::print_profile_data();
-    }
-    return;
-
-    for (auto g : GoalLatency) {
-        MaxQueueTime = g.count();
-
-        while (true) {
-            PararoutineServer server(workload);
-            bool goal_achieved = run("proutine", &server, &workload, config);
-            if (goal_achieved) break;
-            config.op_duration =
-                int64_t(config.op_duration.count() * 1.1) * 1ns;
-        }
-
-        // RUN("dry", DryServer);
-        // RUN("local", LocalServer);
-        // RUN("sync", SyncServer);
-
-        // perf_profile([&] {
-        // profile::start_work();
-        // profile::thread_start_work();
-        // RUN("uthread", UThreadServer);
-        // profile::thread_end_work();
-        // profile::end_work();
-        // }).print();
-        // profile::print_profile_data();
-
-        // perf_profile([&] {
-        // profile::start_work();
-        // profile::thread_start_work();
-        // RUN("proutine", PararoutineServer);
-        // profile::thread_end_work();
-        // profile::end_work();
-        // // }).print();
-        // profile::print_profile_data();
 
         // std::cout << std::endl;
     }

@@ -5,7 +5,7 @@
 
 #include "utils/spinlock.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 template <typename Key, typename Val, typename Hash = std::hash<Key>>
 class ConcurrentHashMap {
@@ -292,4 +292,4 @@ inline bool ConcurrentHashMap<Key, Val, Hash>::remove(const Key &key) {
     return false;
 }
 
-}  // namespace Beehive
+}  // namespace FarLib

@@ -1,10 +1,11 @@
 #!/bin/bash
 set -e
-pushd /path/to/Beehive-cpp/benchmark/socialNetwork/
+pushd /path/to/FarLib/benchmark/socialNetwork/
+your_password="password"
 core=16
 local_mem_size=6 # 12.5%, 25%, 50%, 75%, 100%
 network_name="socfb-A-anon"
-network_file="/mnt/${network_name}.mtx"
+network_file="/path/to/social-network/${network_name}.mtx"
 result_dir=../../results/social-network/mem125-scheduler
 config_file="../../social_network.config"
 mkdir -p ${result_dir}
@@ -15,7 +16,7 @@ program_name="socialNetwork"
 for i in ${thread_nums[@]}
 do
     sed "s/constexpr static uint64_t kNumServerThreads.*/constexpr static uint64_t kNumServerThreads = $[$i];/g" config.hpp -i
-    pushd /path/to/Beehive-cpp/build
+    pushd /path/to/FarLib/build
     ninja $program_name
     popd
     # output_file="./build/test.txt"

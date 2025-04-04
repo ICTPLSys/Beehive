@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>  // for std::hash
 
 typedef uint64_t obj_id_t;
-namespace Beehive {
+namespace FarLib {
 
 namespace cache {
 
@@ -43,12 +44,12 @@ typedef FarObject far_obj_t;
 
 }  // namespace cache
 
-}  // namespace Beehive
+}  // namespace FarLib
 
 namespace std {
 template <>
-struct hash<Beehive::cache::far_obj_t> {
-    std::size_t operator()(const Beehive::cache::far_obj_t &far_obj) const {
+struct hash<FarLib::cache::far_obj_t> {
+    std::size_t operator()(const FarLib::cache::far_obj_t &far_obj) const {
         return std::hash<uint64_t>{}(far_obj.obj_id);
     }
 };

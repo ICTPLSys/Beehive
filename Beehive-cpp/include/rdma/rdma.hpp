@@ -5,12 +5,13 @@
 #pragma once
 #include <infiniband/verbs.h>
 
-#include <iostream>
+#include <cstddef>
+#include <cstdint>
 
 #include "config.hpp"
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace rdma {
 enum RequestType {
@@ -18,18 +19,19 @@ enum RequestType {
 };
 
 struct ClientConnectionInfo {
-    uint32_t psn;       // Packet Sequence Number
-    uint16_t lid;       // Local IDentifier
-    uint16_t qp_count;  // QP Count
-    uint32_t qpn[0];    // QP Numbers
+    size_t server_buffer_size;  // in byte
+    uint32_t psn;               // Packet Sequence Number
+    uint16_t lid;               // Local IDentifier
+    uint16_t qp_count;          // QP Count
+    uint8_t max_rd_atomic;      // max_rd_atomic & max_dest_rd_atomic
+    int mtu;                    // ibv_mtu
+    uint32_t qpn[0];            // QP Numbers
 };
 
-// The following info should be matched
-// Some of them are constant or assumed to be the same at now
+static_assert(offsetof(ClientConnectionInfo, qpn) ==
+              sizeof(ClientConnectionInfo));
+
 struct ServerConnectionInfo {
-    // p_key
-    // path mtu
-    // max_rd_atomic & max_dest_rd_atomic
     uint32_t psn;       // Packet Sequence Number
     uint16_t lid;       // Local IDentifier
     uint16_t qp_count;  // QP Count
@@ -99,8 +101,30 @@ struct MemoryRegion {
     }
 };
 
+struct CompleteChannel {
+    ibv_comp_channel *channel;
+    CompleteChannel(const CompleteChannel &) = delete;
+    CompleteChannel(CompleteChannel &&) = delete;
+
+    CompleteChannel(Context &ctx) {
+        channel = ibv_create_comp_channel(ctx.context);
+        ASSERT(channel != nullptr);
+    }
+    ~CompleteChannel() { CHECK_ERR(ibv_destroy_comp_channel(channel)); }
+
+    void wait_cq_event() {
+        ibv_cq *ev_cq;
+        void *ev_ctx;
+        CHECK_ERR(ibv_get_cq_event(channel, &ev_cq, &ev_ctx));
+        ibv_ack_cq_events(ev_cq, 1);
+    }
+};
+
 struct CompleteQueue {
     ibv_cq *complete_queue;
+
+    CompleteQueue(const CompleteQueue &) = delete;
+    CompleteQueue(CompleteQueue &&) = delete;
 
     CompleteQueue(Context &ctx, const Configure &config) {
         complete_queue =
@@ -108,7 +132,18 @@ struct CompleteQueue {
         ASSERT(complete_queue);
     }
 
+    CompleteQueue(Context &ctx, const Configure &config,
+                  const CompleteChannel &channel) {
+        complete_queue = ibv_create_cq(ctx.context, config.cq_entries, nullptr,
+                                       channel.channel, 0);
+        ASSERT(complete_queue);
+    }
+
     ~CompleteQueue() { CHECK_ERR(ibv_destroy_cq(complete_queue)); }
+
+    void req_notify(bool solicited_only) {
+        CHECK_ERR(ibv_req_notify_cq(complete_queue, solicited_only));
+    }
 };
 
 struct QueuePair {
@@ -184,7 +219,7 @@ struct QueuePair {
             .rq_psn = psn,
             .dest_qp_num = qpn,
             .ah_attr = ah_attr,
-            .max_dest_rd_atomic = config.qp_max_dest_rd_atomic,
+            .max_dest_rd_atomic = config.qp_max_rd_atomic,
             .min_rnr_timer = config.qp_min_rnr_timer,
         };
         CHECK_ERR(ibv_modify_qp(queue_pair, &qp_attr, attr_mask));
@@ -208,4 +243,4 @@ struct QueuePair {
 
 }  // namespace rdma
 
-}  // namespace Beehive
+}  // namespace FarLib

@@ -10,7 +10,7 @@
 #include "utils/control.hpp"
 #include "utils/fork_join.hpp"
 
-using namespace Beehive;
+using namespace FarLib;
 
 #define DEFINE_DATA_TYPE(width)                        \
     struct Data_##width {                              \
@@ -84,9 +84,9 @@ void do_work(size_t nthreads, size_t delay_ns) {
         uint64_t prefetch_idx = 0;
         auto &fm_array = fm_arrays[tid];
         ON_MISS_BEGIN
-            auto cache = Beehive::Cache::get_default();
+            auto cache = FarLib::Cache::get_default();
             auto &j = prefetch_idx;
-            cache::OnMissScope oms(__entry__, &scope);
+            __define_oms__(scope);
             for (j = std::max(i + 1, j); j < fm_array.size() && j <= i + 1024;
                  j++) {
                 cache->prefetch(fm_array[j].obj(), oms);

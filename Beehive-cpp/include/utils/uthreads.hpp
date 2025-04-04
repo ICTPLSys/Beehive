@@ -6,7 +6,7 @@
 #include "libfibre/fibre.h"
 #include "utils/stats.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace uthread {
 
@@ -27,19 +27,18 @@ inline size_t get_worker_count() {
 inline size_t get_thread_count() { return 16; }
 /* clang-format on */
 
-template <bool LowPriority = false>
 inline std::unique_ptr<UThread> create(void (*func)()) {
     auto uthread = std::make_unique<UThread>();
     uthread->run(func);
     return uthread;
 }
 
-template <bool LowPriority = false, typename T>
+template <bool HighPriority = false, typename T>
 inline std::unique_ptr<UThread> create(void (*func)(T *), T *arg,
                                        std::string name = "") {
     auto uthread = std::make_unique<UThread>();
-    if constexpr (LowPriority) {
-        uthread->setPriority(Fibre::LowPriority);
+    if constexpr (HighPriority) {
+        uthread->setPriority(Fibre::TopPriority);
     }
     uthread->setName(name);
     uthread->run(func, arg);
@@ -106,8 +105,16 @@ inline UThreadLocal *get_tls() {
     return static_cast<UThreadLocal *>(fibre_self());
 }
 
+inline void set_default_priority() {
+    fibre_self()->setPriority(Fibre::DefaultPriority);
+}
+
+inline void set_high_priority() {
+    fibre_self()->setPriority(Fibre::TopPriority);
+}
+
 }  // namespace uthread
 
 using uthread::UThread;
 
-}  // namespace Beehive
+}  // namespace FarLib

@@ -33,8 +33,8 @@
 // ----------------------------------------------------------------------------
 // Transformer model
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 static constexpr size_t UTHREAD_FACTOR = 1;
 static inline size_t get_thread_count() {
@@ -1464,8 +1464,8 @@ int main(int argc, char* argv[]) {
               << static_cast<double>(config.client_buffer_size) / (1 << 30)
               << "G" << std::endl;
     std::cout << "core count: " << config.max_thread_cnt << std::endl;
-    Beehive::runtime_init(config);
-    Beehive::perf_init();
+    FarLib::runtime_init(config);
+    FarLib::perf_init();
     // build the Transformer via the model .bin file
     Transformer transformer;
     build_transformer(&transformer, checkpoint_path);
@@ -1483,7 +1483,7 @@ int main(int argc, char* argv[]) {
 
     // run!
     auto start = get_cycles();
-    Beehive::perf_profile([&] {
+    FarLib::perf_profile([&] {
         auto start = get_cycles();
         if (strcmp(mode, "generate") == 0) {
             generate(&transformer, &tokenizer, &sampler, prompt, steps);
@@ -1503,7 +1503,7 @@ int main(int argc, char* argv[]) {
     free_sampler(&sampler);
     free_tokenizer(&tokenizer);
     free_transformer(&transformer);
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
 #ifdef STANDALONE
     server_thread.join();
 #endif

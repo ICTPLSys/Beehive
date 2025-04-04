@@ -1,7 +1,7 @@
 #pragma once
 #include "entry.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace cache {
 class DereferenceScope {
 protected:
@@ -55,8 +55,6 @@ public:
         enter();
         recursive_unpin();
     }
-
-    DereferenceScope *as_scope() { return this; }
 };
 
 class RootDereferenceScope : public DereferenceScope {
@@ -74,4 +72,4 @@ struct OnMissScope : public DereferenceScope {
 };
 
 }  // namespace cache
-};  // namespace Beehive
+};  // namespace FarLib

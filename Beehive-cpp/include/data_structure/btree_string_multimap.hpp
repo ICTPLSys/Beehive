@@ -13,7 +13,7 @@
 #include "data_structure/dyn_sized_object.hpp"
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 template <typename V>
 class KVPairs {
@@ -699,4 +699,4 @@ public:
     iterator end() { return iterator(nullptr); }
 };
 
-}  // namespace Beehive
+}  // namespace FarLib

@@ -126,8 +126,8 @@ void HeteroVector::emplace(ITR pos, Args&&... args)
 template <Algorithm alg, typename T, typename U>
 void HeteroVector::visit_impl_help_(T& visitor)
 {
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
     auto iter = vectors_<U>.find(this);
     if (iter != vectors_<U>.end()) {
         if constexpr (alg == DEFAULT) {
@@ -157,8 +157,8 @@ void HeteroVector::visit_impl_help_(T& visitor)
 template <Algorithm alg, typename T, typename U>
 void HeteroVector::visit_impl_help_(T& visitor) const
 {
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
 
     const auto citer = vectors_<U>.find(this);
 

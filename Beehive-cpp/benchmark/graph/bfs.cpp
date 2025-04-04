@@ -3,8 +3,8 @@
 
 // returns a checksum
 template <bool Optimize>
-void bfs(Graph &graph, const Options &options) {
-    constexpr size_t MaxThreadCount = 64;
+void bfs(Graph<> &graph, const Options &options) {
+    constexpr size_t MaxThreadCount = Optimize ? 16 : 256;
     size_t vertex_count = graph.vertex_count();
     vertex_t src =
         options.src.has_value() ? options.src.value() : rand() % vertex_count;
@@ -44,10 +44,13 @@ void bfs(Graph &graph, const Options &options) {
 int main(int argc, const char *const argv[]) {
     Options options;
     read_options(argc, argv, options);
-    Beehive::rdma::Configure config;
+    FarLib::rdma::Configure config;
     config.from_file(options.config_file_name.c_str());
-    Beehive::runtime_init(config);
-    evaluate(bfs<true>, bfs<false>, options);
-    Beehive::runtime_destroy();
+    if (options.local_memory.has_value()) {
+        config.client_buffer_size = options.local_memory.value();
+    }
+    FarLib::runtime_init(config);
+    evaluate<false>(bfs<true>, options);
+    FarLib::runtime_destroy();
     return 0;
 }

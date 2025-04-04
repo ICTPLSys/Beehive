@@ -9,7 +9,7 @@
 #include <functional>
 #endif
 
-namespace Beehive {
+namespace FarLib {
 
 namespace signal {
 
@@ -24,6 +24,7 @@ struct SignalManager {
 };
 
 extern thread_local std::function<void(void)> on_sigusr1;
+extern thread_local SignalManager signal_manager;
 extern thread_local std::atomic_bool signal_enabled;
 extern thread_local std::atomic_bool signaled;
 
@@ -51,4 +52,4 @@ inline void enable_signal() {}
 
 }  // namespace signal
 
-}  // namespace Beehive
+}  // namespace FarLib

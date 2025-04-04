@@ -8,8 +8,8 @@
 
 #include "rdma/client.hpp"
 
-namespace Beehive {
-using namespace Beehive::rdma;
+namespace FarLib {
+using namespace FarLib::rdma;
 static uint8_t mode;
 static Configure global_config;
 void runtime_init(const rdma::Configure &config, bool enable_cache) {
@@ -20,10 +20,10 @@ void runtime_init(const rdma::Configure &config, bool enable_cache) {
         mode |= Configure::MODE_ENABLE_CACHE | Configure::MODE_ENABLE_UTHREAD;
     }
     ClientControl::init_default(config);
+    client.init();
     if (mode & Configure::MODE_ENABLE_UTHREAD) {
         uthread::runtime_init(config.max_thread_cnt);
     }
-    client.connect();
     if (mode & Configure::MODE_ENABLE_CACHE) {
         Cache::init_default(Client::get_default()->get_buffer(),
                             config.client_buffer_size,
@@ -35,7 +35,6 @@ void runtime_destroy() {
     if (mode & Configure::MODE_ENABLE_CACHE) {
         Cache::destroy_default();
     }
-    client.disconnect();
     if (mode & Configure::MODE_ENABLE_UTHREAD) {
         uthread::runtime_destroy();
     }
@@ -43,12 +42,12 @@ void runtime_destroy() {
 }
 
 const Configure &get_config() { return global_config; }
-}  // namespace Beehive
+}  // namespace FarLib
 
 #else
 
-namespace Beehive {
-using namespace Beehive::rdma;
+namespace FarLib {
+using namespace FarLib::rdma;
 static Configure global_config;
 void runtime_init(const rdma::Configure &config, bool enable_cache) {
     global_config = config;
@@ -72,6 +71,6 @@ void runtime_destroy() {
 }
 
 const Configure &get_config() { return global_config; }
-}  // namespace Beehive
+}  // namespace FarLib
 
 #endif

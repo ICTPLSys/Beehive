@@ -53,9 +53,9 @@ template <typename CF, typename... Ts>
 void DataFrame<I, H>::sort_common_(DataFrame<I, H>& df, CF&& comp_func)
 {
     // const size_type idx_s = df.indices_.size();
-    // Beehive::FarVector<size_type> sorting_idxs(idx_s);
-    // Beehive::FarVector<size_type>::iota(sorting_idxs.lbegin(), sorting_idxs.lend(), 0);
-    // Beehive::FarVector<size_type>::sort(sorting_idxs.lbegin(), sorting_idxs.lend(), comp_func);
+    // FarLib::FarVector<size_type> sorting_idxs(idx_s);
+    // FarLib::FarVector<size_type>::iota(sorting_idxs.lbegin(), sorting_idxs.lend(), 0);
+    // FarLib::FarVector<size_type>::sort(sorting_idxs.lbegin(), sorting_idxs.lend(), comp_func);
 
     // sort_functor_<Ts...> functor(sorting_idxs, idx_s);
 
@@ -66,17 +66,17 @@ void DataFrame<I, H>::sort_common_(DataFrame<I, H>& df, CF&& comp_func)
 
 template <typename I, typename H>
 template <Algorithm alg, bool Ascend, typename T, typename... Ts>
-void DataFrame<I, H>::sort_common_(DataFrame<I, H>& df, Beehive::FarVector<T>& vec)
+void DataFrame<I, H>::sort_common_(DataFrame<I, H>& df, FarLib::FarVector<T>& vec)
 {
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
     if (!(sizeof(T) <= 2 && std::is_integral<T>::value)) {
         ERROR("T is too big for count sort");
     }
     const size_type idx_s = df.indices_.size();
-    Beehive::FarVector<size_type> sorting_idxs;
+    FarLib::FarVector<size_type> sorting_idxs;
     {
-        using namespace Beehive::cache;
+        using namespace FarLib::cache;
         constexpr int64_t T_max     = std::numeric_limits<T>::max();
         constexpr int64_t T_min     = std::numeric_limits<T>::min();
         constexpr int64_t cnts_size = T_max - T_min + 1;
@@ -1113,13 +1113,16 @@ DataFrame<I, H> DataFrame<I, H>::groupby(F&& func, const char* gb_col_name,
 
     if (!::strcmp(gb_col_name, DF_INDEX_COL_NAME)) {  // Index
         const size_type vec_size = tmp_df.indices_.size();
-
         for (size_type i = 0; i < vec_size; ++i) {
-            if (*tmp_df.indices_[i] != *tmp_df.indices_[marker]) {
+            bool res;
+            {
+                RootDereferenceScope scope;
+                res = *tmp_df.indices_.get_const_lite_iter(i, scope) != *tmp_df.indices_.get_lite_iter(marker, scope);
+            }
+            if (res) {
                 {
                     RootDereferenceScope scope;
-
-                    result.append_index(*tmp_df.indices_[marker], scope);
+                    result.append_index(*tmp_df.indices_.get_const_lite_iter(marker, scope), scope);
                 }
                 for (const auto& iter : tmp_df.column_tb_) {
                     groupby_functor_<F, Ts...> functor(iter.first.c_str(), marker, i,
@@ -1135,7 +1138,7 @@ DataFrame<I, H> DataFrame<I, H>::groupby(F&& func, const char* gb_col_name,
             {
                 RootDereferenceScope scope;
 
-                result.append_index(*tmp_df.indices_[vec_size - 1], scope);
+                result.append_index(*tmp_df.indices_.get_const_lite_iter(vec_size - 1, scope), scope);
             }
             for (const auto& iter : tmp_df.column_tb_) {
                 groupby_functor_<F, Ts...> functor(iter.first.c_str(), marker, vec_size,
@@ -1149,14 +1152,19 @@ DataFrame<I, H> DataFrame<I, H>::groupby(F&& func, const char* gb_col_name,
 
         const size_type vec_size = gb_vec.size();
         for (size_type i = 0; i < vec_size; ++i) {
-            if (*gb_vec[i] != *gb_vec[marker]) {
+            bool res;
+            {
+                RootDereferenceScope scope;
+                res = *(gb_vec.get_const_lite_iter(i, scope)) != *(gb_vec.get_const_lite_iter(marker, scope));
+            }
+            if (res) {
                 groupby_functor_<F, IndexType> ts_functor(DF_INDEX_COL_NAME, marker, i,
                                                           tmp_df.indices_, func, result);
                 ts_functor(tmp_df.indices_);
 
                 {
                     RootDereferenceScope scope;
-                    result.append_column<T>(gb_col_name, *gb_vec[marker], scope,
+                    result.append_column<T>(gb_col_name, *gb_vec.get_const_lite_iter(marker, scope), scope,
                                             nan_policy::dont_pad_with_nans);
                 }
 
@@ -1180,7 +1188,7 @@ DataFrame<I, H> DataFrame<I, H>::groupby(F&& func, const char* gb_col_name,
 
             {
                 RootDereferenceScope scope;
-                result.append_column<T>(gb_col_name, *gb_vec[vec_size - 1], scope,
+                result.append_column<T>(gb_col_name, *gb_vec.get_const_lite_iter(vec_size - 1, scope), scope,
                                         nan_policy::dont_pad_with_nans);
             }
 

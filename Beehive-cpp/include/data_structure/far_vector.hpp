@@ -2,16 +2,15 @@
 #include <array>
 #include <concepts>
 #include <cstdlib>
-#include <cstring>
-#include <functional>
-#include <unordered_set>
 #include <vector>
+#include <unordered_set>
 
-#include "async/scoped_inline_task.hpp"
+#include "cache/accessor.hpp"
 #include "cache/cache.hpp"
 #include "option.hpp"
 #include "utils/parallel.hpp"
-namespace Beehive {
+#include "async/scoped_inline_task.hpp"
+namespace FarLib {
 // TODO VecElementType can be non-trivially destructible
 template <typename T>
 concept VecElementType =
@@ -57,7 +56,7 @@ private:
                 uthread::get_thread_count(), alloc_num,
                 [&](size_t i, DereferenceScope &scope) {
                     assert(i + start_idx < groups_.size());
-                    groups_[i + start_idx].allocate_uninitialized(scope);
+                    groups_[i + start_idx].allocate_lite_uninitialized(scope);
                 });
             // TODO use pararoutine
         } else {
@@ -66,7 +65,7 @@ private:
                 (count + GroupSize - 1) / GroupSize - groups_.size();
             while (alloc_num--) {
                 UniquePtr &uptr = groups_.emplace_back();
-                uptr.allocate_uninitialized(scope);
+                uptr.allocate_lite_uninitialized(scope);
             }
         }
     }
@@ -76,17 +75,18 @@ private:
             (count + GroupSize - 1) / GroupSize - groups_.size();
         while (alloc_num--) {
             UniquePtr &uptr = groups_.emplace_back();
-            uptr.allocate_uninitialized(scope);
+            uptr.allocate_lite_uninitialized(scope);
         }
     }
 
-    inline void resize_enlarge(size_type count, const T &init_val) {
+    inline void resize_enlarge(size_type count, const T &init_val,
+                               DereferenceScope &scope) {
         size_type init_idx_for_last_group = size_ % GroupSize;
         if (init_idx_for_last_group > 0) {
             size_type init_lim_for_last_group =
                 count > GroupSize * groups_.size() ? GroupSize
                                                    : count % GroupSize;
-            Accessor<Group> group_acc(groups_.back());
+            LiteAccessor<Group> group_acc = groups_.back().access(scope);
             for (; init_idx_for_last_group < init_lim_for_last_group;
                  init_idx_for_last_group++) {
                 new (&((*group_acc)[init_idx_for_last_group])) T(init_val);
@@ -99,37 +99,25 @@ private:
             RootDereferenceScope scope;
             while (alloc_num > 1) {
                 UniquePtr &uptr = groups_.emplace_back();
-                uptr.allocate_uninitialized(scope);
-                LiteAccessor<Group, true> acc(uptr, scope);
-                std::fill(acc->begin(), acc->end(), init_val);
+                auto group_acc = uptr.allocate_lite_uninitialized(scope);
+                std::fill(group_acc->begin(), group_acc->end(), init_val);
                 alloc_num--;
             }
             UniquePtr &uptr = groups_.emplace_back();
-            uptr.allocate_uninitialized(scope);
-            LiteAccessor<Group, true> acc(uptr, scope);
-            std::fill(acc->begin(), acc->begin() + count % GroupSize, init_val);
+            auto group_acc = uptr.allocate_lite_uninitialized(scope);
+            std::fill(group_acc->begin(),
+                      group_acc->begin() + count % GroupSize, init_val);
         }
     }
 
     inline void check_index(size_type index) const { assert(index < size_); }
 
 public:
-    template <bool Mut = true>
-    class Iterator;
-
-    template <bool Mut = true>
-    class ReverseIterator;
 
     template <bool Mut = true>
     class LiteIterator;
 
-    using ConstIterator = Iterator<false>;
-    using ConstReverseIterator = ReverseIterator<false>;
     using ConstLiteIterator = LiteIterator<false>;
-    using iterator = Iterator<true>;
-    using const_iterator = ConstIterator;
-    using reverse_iterator = ReverseIterator<true>;
-    using const_reverse_iterator = ConstReverseIterator;
     using lite_iterator = LiteIterator<true>;
     using const_lite_iterator = LiteIterator<false>;
 
@@ -177,7 +165,7 @@ public:
                 for (size_t i = idx_begin; i < idx_end; i++) {
                     auto &group_uptr = groups_[i];
                     auto &that_group_uptr = that.groups_[i];
-                    group_uptr.allocate_uninitialized(scp);
+                    group_uptr.allocate_lite_uninitialized(scp);
                     ON_MISS_BEGIN
                         cache::OnMissScope oms(__entry__, &scope);
                         constexpr size_t PREFETCH_LIM = 16UL;
@@ -267,43 +255,13 @@ public:
 
     size_type groups_count() const { return groups_.size(); }
 
-    void push_back_slow(T &&value) {
-        size_type inner_idx = size_ % GroupSize;
-        if (inner_idx == 0) {
-            // need a new group
-            UniquePtr &group_uptr = groups_.emplace_back();
-            auto group_accessor = group_uptr.allocate_uninitialized();
-            new (&((*group_accessor)[0])) T(std::move(value));
-        } else {
-            // store at the last group
-            Accessor<Group> group_accessor(groups_[size_ / GroupSize]);
-            new (&((*group_accessor)[inner_idx])) T(std::move(value));
-        }
-        size_++;
-    }
-
-    void push_back_slow(const T &value) {
-        size_type inner_idx = size_ % GroupSize;
-        if (inner_idx == 0) {
-            // need a new group
-            UniquePtr &group_uptr = groups_.emplace_back();
-            auto group_accessor = group_uptr.allocate_uninitialized();
-            new (&((*group_accessor)[0])) T(value);
-        } else {
-            // store at the last group
-            Accessor<Group> group_accessor(groups_[size_ / GroupSize]);
-            new (&((*group_accessor)[inner_idx])) T(value);
-        }
-        size_++;
-    }
-
     void push_back(T &&value, DereferenceScope &scope) {
         assert(capacity() >= size());
         size_type inner_idx = size_ % GroupSize;
         if (inner_idx == 0) {
             // need a new group
             UniquePtr &group_uptr = groups_.emplace_back();
-            group_uptr.allocate_uninitialized(scope);
+            group_uptr.allocate_lite_uninitialized(scope);
             LiteAccessor<Group, true> group_accessor(group_uptr, scope);
             new (&((*group_accessor)[0])) T(std::move(value));
         } else {
@@ -321,7 +279,7 @@ public:
         if (inner_idx == 0) {
             // need a new group
             UniquePtr &group_uptr = groups_.emplace_back();
-            group_uptr.allocate_uninitialized(scope);
+            group_uptr.allocate_lite_uninitialized(scope);
             LiteAccessor<Group, true> group_accessor(group_uptr, scope);
             new (&((*group_accessor)[0])) T(value);
         } else {
@@ -331,11 +289,6 @@ public:
             new (&((*group_accessor)[inner_idx])) T(value);
         }
         size_++;
-    }
-
-    template <typename... Args>
-    void emplace_back_slow(Args &&...args) {
-        push_back_slow(T(std::forward<Args>(args)...));
     }
 
     void pop_back() {
@@ -381,38 +334,43 @@ public:
         size_ = count;
     }
 
-    void resize(size_type count, const T &init_val) {
-        assert(capacity() >= size());
+    void resize(size_type count, const T &init_val, DereferenceScope &scope) {
         if (count < size_) {
             resize_shrink(count);
         } else if (count > size_) {
-            resize_enlarge(count, init_val);
+            resize_enlarge(count, init_val, scope);
         }
         size_ = count;
     }
 
-    Accessor<T> front_mut() { return at_mut(0); }
-
-    ConstAccessor<T> front() { return at(0); }
-
-    Accessor<T> back_mut() { return at_mut(size_ - 1); }
-
-    ConstAccessor<T> back() { return at(size_ - 1); }
-
-    Accessor<T> at_mut(size_type index) {
-        check_index(index);
-        size_type inner_idx = index % GroupSize;
-        Accessor<Group> group_accessor = groups_[index / GroupSize];
-        return Accessor<T>(std::move(group_accessor),
-                           &((*group_accessor)[inner_idx]));
+    LiteAccessor<T, true> front_mut(DereferenceScope &scope) {
+        return at_mut(0);
     }
 
-    ConstAccessor<T> at(size_type index) const {
+    LiteAccessor<T> front(DereferenceScope &scope) { return at(0); }
+
+    LiteAccessor<T, true> back_mut(DereferenceScope &scope) {
+        return at_mut(size_ - 1);
+    }
+
+    LiteAccessor<T> back(DereferenceScope &scope) { return at(size_ - 1); }
+
+    LiteAccessor<T, true> at_mut(size_type index, DereferenceScope &scope) {
         check_index(index);
         size_type inner_idx = index % GroupSize;
-        ConstAccessor<Group> const_group_accessor = groups_[index / GroupSize];
-        return ConstAccessor<T>(std::move(const_group_accessor),
-                                &((*const_group_accessor)[inner_idx]));
+        LiteAccessor<Group, true> group_accessor =
+            groups_[index / GroupSize].template access<true>(scope);
+        return LiteAccessor<T>(std::move(group_accessor),
+                               &((*group_accessor)[inner_idx]));
+    }
+
+    LiteAccessor<T> at(size_type index, DereferenceScope &scope) const {
+        check_index(index);
+        size_type inner_idx = index % GroupSize;
+        LiteAccessor<Group> const_group_accessor =
+            groups_[index / GroupSize].access(scope);
+        return LiteAccessor<T>(std::move(const_group_accessor),
+                               &((*const_group_accessor)[inner_idx]));
     }
 
     LiteAccessor<T> at(size_type index, DereferenceScope &scope,
@@ -443,21 +401,10 @@ public:
         }
     }
 
-    Accessor<T> operator[](size_type index) { return at_mut(index); }
-
-    ConstAccessor<T> operator[](size_type index) const { return at(index); }
-
-    Self &operator=(std::vector<T> &&data) {
-        // TODO can be faster without clear and reallocate
-        clear();
-        resize<true>(data.size());
-        RootDereferenceScope scope;
-        auto it = lbegin(scope);
-        for (auto &d : data) {
-            *it = d;
-            it.next(scope);
+    void check() {
+        for (auto &uptr : groups_) {
+            assert(uptr.entry.load_state().state != cache::FREE);
         }
-        return *this;
     }
 
     Self &operator=(const std::vector<T> &data) {
@@ -480,42 +427,6 @@ public:
     }
 
     Self &operator=(FarVector &&that) = default;
-
-    iterator begin() {
-        return iterator(
-            this->groups_.data(), 0, this->groups_.data(),
-            this->groups_.data() + (size_ + GroupSize - 1) / GroupSize);
-    }
-
-    iterator end() { return iterator(begin() + size_); }
-
-    reverse_iterator rbegin() { return reverse_iterator(end() - 1); }
-
-    reverse_iterator rend() { return reverse_iterator(begin() - 1); }
-
-    const_iterator cbegin() const {
-        return const_iterator(
-            this->groups_.data(), 0, this->groups_.data(),
-            this->groups_.data() + (size_ + GroupSize - 1) / GroupSize);
-    }
-
-    const_iterator cend() const { return const_iterator(cbegin() + size_); }
-
-    const_reverse_iterator crbegin() const {
-        return const_reverse_iterator(cend() - 1);
-    }
-
-    const_reverse_iterator crend() const {
-        return const_reverse_iterator(cbegin() - 1);
-    }
-
-    const_iterator begin() const { return cbegin(); }
-
-    const_iterator end() const { return cend(); }
-
-    const_reverse_iterator rbegin() const { return crbegin(); }
-
-    const_reverse_iterator rend() const { return crend(); }
 
     lite_iterator lbegin(DereferenceScope &scope) {
         return lite_iterator(
@@ -927,6 +838,53 @@ public:
             });
     }
 
+    size_t lower_bound(const T& val, DereferenceScope &scope) const {
+        size_t low = 0;
+        size_t high = size_;
+        while (low < high) {
+            size_t mid = (low + high) / 2;
+            if (*get_const_lite_iter(mid, scope) < val) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
+    }
+
+    size_t upper_bound(const T& val, DereferenceScope &scope) const {
+        size_t low = 0;
+        size_t high = size_;
+        while (low < high) {
+            size_t mid = (low + high) / 2;
+            if (*get_const_lite_iter(mid, scope) <= val) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
+    }
+
+    size_t get_median(DereferenceScope &scope, size_t start, size_t end) const {
+        std::vector<T> tmp_vec(end - start);
+        size_t k = (end - start) / 2;
+        auto it = get_const_lite_iter(start, scope, start, end);
+        for (size_t i = 0; i < end - start; i++) {
+            tmp_vec[i] = *(it);
+            it.next(scope);
+        }
+        std::nth_element(tmp_vec.begin(), tmp_vec.begin() + k, tmp_vec.end());
+        auto kth = tmp_vec[k];
+        if ((end - start) % 2 == 0) {
+            std::nth_element(tmp_vec.begin(), tmp_vec.begin() + k + 1, tmp_vec.end());
+            auto kth2 = tmp_vec[k + 1];
+            return (kth + kth2) / 2;
+        } else {
+            return kth;
+        }
+    }
+
 private:
     /* ---------------------- lite sort ---------------------- */
     template <SortAlgorithm Alg>
@@ -1104,7 +1062,7 @@ private:
         return val;
     }
 };
-}  // namespace Beehive
+}  // namespace FarLib
 /* clang-format off */
 #include "data_structure/far_vector_iter.ipp"
 #include "data_structure/far_vector_lite_iter.ipp"

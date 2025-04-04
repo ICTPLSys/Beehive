@@ -5,7 +5,7 @@
 
 #include "libfibre/fibre.h"
 
-namespace Beehive {
+namespace FarLib {
 
 template <size_t ThreadCount>
 void pthread_run(std::function<void(size_t)> task) {
@@ -41,4 +41,4 @@ void uthread_run(std::function<void(size_t)> task) {
     }
 }
 
-}  // namespace Beehive
+}  // namespace FarLib

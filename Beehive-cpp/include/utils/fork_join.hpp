@@ -1,12 +1,14 @@
 #pragma once
 #include <atomic>
+#include <cstdio>
 #include <functional>
 #include <memory>
+#include <type_traits>
 
 #include "uthreads.hpp"
 #include "utils/stats.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace uthread {
 
 inline void fork_join_work_list(size_t work_count,
@@ -51,7 +53,8 @@ inline void fork_join_work_list(size_t work_count,
     profile::resume_work(suspended);
 }
 
-inline void fork_join(size_t thread_count, std::function<void(size_t)> &fn) {
+template <bool HighPriority = false>
+inline void fork_join(size_t thread_count, auto &&fn) {
     if (thread_count == 1) {
         fn(0);
         return;
@@ -59,7 +62,7 @@ inline void fork_join(size_t thread_count, std::function<void(size_t)> &fn) {
     struct UThreadTask {
         Fibre fibre;
         size_t thread_id;
-        std::function<void(size_t)> *func;
+        std::remove_reference_t<decltype(fn)> *func;
     };
     typedef void (*uthread_fn_t)(UThreadTask *);
     uthread_fn_t uthread_fn = [](UThreadTask *task) {
@@ -72,6 +75,9 @@ inline void fork_join(size_t thread_count, std::function<void(size_t)> &fn) {
     for (size_t i = 0; i < thread_count; i++) {
         tasks[i].thread_id = i;
         tasks[i].func = &fn;
+        if constexpr (HighPriority) {
+            tasks[i].fibre.setPriority(Fibre::TopPriority);
+        }
         tasks[i].fibre.run(uthread_fn, &tasks[i]);
     }
     bool suspended = profile::suspend_work();
@@ -83,4 +89,4 @@ inline void fork_join(size_t thread_count, std::function<void(size_t)> &fn) {
     profile::resume_work(suspended);
 }
 }  // namespace uthread
-}  // namespace Beehive
+}  // namespace FarLib

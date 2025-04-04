@@ -7,7 +7,7 @@
 #include "utils/debug.hpp"
 #include "utils/parallel.hpp"
 #include "utils/stats.hpp"
-namespace Beehive {
+namespace FarLib {
 
 /* lite sort */
 template <VecElementType T, size_t GroupSize>
@@ -70,7 +70,7 @@ void FarVector<T, GroupSize>::merge_sort_inrecursive(in_iterator_t *begin_group,
     {
         in_iterator_t *lim = end_idx > 0 ? end_group + 1 : end_group;
         size_t n = end_group - begin_group + (end_idx > 0 ? 1 : 0);
-        Beehive::uthread::parallel_for_with_scope<1>(
+        FarLib::uthread::parallel_for_with_scope<1>(
             (Alg == UTHREAD_LITE_SORT
                  ? uthread::get_thread_count() * UTHREAD_FACTOR
                  : uthread::get_thread_count()),
@@ -78,7 +78,7 @@ void FarVector<T, GroupSize>::merge_sort_inrecursive(in_iterator_t *begin_group,
                 in_iterator_t *group_uptr = begin_group + i;
                 ON_MISS_BEGIN
                     if constexpr (Alg == UTHREAD_LITE_SORT) {
-                        Beehive::uthread::yield();
+                        FarLib::uthread::yield();
                     } else if constexpr (Alg == OOO_LITE_SORT) {
                         cache::OnMissScope oms(__entry__, &scope);
                         for (in_iterator_t *uptr = group_uptr + 1; uptr < lim;
@@ -119,7 +119,7 @@ void FarVector<T, GroupSize>::sort_merge(in_iterator_t *begin_group,
     size_t n = end_group - begin_group + (end_idx > 0 ? 1 : 0);
     for (size_t gap = 1; gap < n; gap *= 2) {
         size_t uth_n = (n + 2 * gap - 1) / (2 * gap);
-        Beehive::uthread::parallel_for_with_scope<1>(
+        FarLib::uthread::parallel_for_with_scope<1>(
             (Alg == UTHREAD_LITE_SORT
                  ? uthread::get_thread_count() * UTHREAD_FACTOR
                  : uthread::get_thread_count()),
@@ -181,7 +181,7 @@ void FarVector<T, GroupSize>::inc_group_idx(in_iterator_t *&group,
                     }
                 }
             } else if constexpr (Alg == SortAlgorithm::UTHREAD_LITE_SORT) {
-                Beehive::uthread::yield();
+                FarLib::uthread::yield();
             }
         ON_MISS_END
         lite_acc = group < lim
@@ -319,7 +319,7 @@ void FarVector<T, GroupSize>::merge_sort_recursive(
                     }
                 }
             } else if constexpr (Alg == UTHREAD_LITE_SORT) {
-                Beehive::uthread::yield();
+                FarLib::uthread::yield();
             }
         ON_MISS_END
         LiteAccessor<Group, true> group_acc(*begin, __on_miss__, root_scope);
@@ -362,7 +362,7 @@ void FarVector<T, GroupSize>::merge_sort_recursive_uth(
     if (begin == latter_begin) {
         RootDereferenceScope root_scope;
         ON_MISS_BEGIN
-            Beehive::uthread::yield();
+            FarLib::uthread::yield();
         ON_MISS_END
         LiteAccessor<Group, true> group_acc(*begin, __on_miss__, root_scope);
         if (begin == begin_group) [[unlikely]] {
@@ -387,7 +387,7 @@ void FarVector<T, GroupSize>::merge_sort_recursive_uth(
                     latter_begin, end, begin_group, begin_idx, end_group,
                     end_idx, cmp, aux, scope);
             };
-            Beehive::uthread::spawn(fn);
+            FarLib::uthread::spawn(fn);
             merge_sort_recursive_uth<Alg, UthreadCount / 2>(
                 begin, latter_begin, begin_group, begin_idx, end_group, end_idx,
                 cmp, aux, scope);
@@ -477,219 +477,201 @@ FarVector<T, GroupSize> FarVector<T, GroupSize>::copy_data_by_idx(
     // auto restart = get_cycles();
     Self vec(vec_size);
     profile::reset_all();
-    if constexpr (alg == DEFAULT) {
-        for (int i = 0; i < vec_size; i++) {
-            (*vec[i]) = *at(*(idx_vec[i]));
-        }
-    } else {
-        // auto start = get_cycles();
-        const size_t thread_cnt = alg == UTHREAD
-                                      ? uthread::get_thread_count() * UTH_FACTOR
-                                      : uthread::get_thread_count();
-        // aligned to group
-        const size_t block = (idx_vec.groups_count() + thread_cnt - 1) /
-                             thread_cnt * idx_vec.GROUP_SIZE;
-        // std::cout << "block size: " << block << ", thread count: " <<
-        // thread_cnt
-        //           << std::endl;
-        // profile::reset_all();
-        uthread::parallel_for_with_scope<1>(
-            thread_cnt, thread_cnt, [&](size_t i, DereferenceScope &scope) {
-                ON_MISS_BEGIN
-                ON_MISS_END
-                using idx_it_t = decltype(idx_vec.clbegin());
-                using vec_it_t = decltype(vec.lbegin());
-                using acc_t = decltype(at(0, scope, __on_miss__));
-                struct Scope : public DereferenceScope {
-                    idx_it_t idx_it;
-                    vec_it_t vec_it;
-                    acc_t acc;
-
-                    void pin() const override {
-                        idx_it.pin();
-                        vec_it.pin();
-                        acc.pin();
-                    }
-
-                    void unpin() const override {
-                        idx_it.unpin();
-                        vec_it.unpin();
-                        acc.unpin();
-                    }
-
-                    void next(__DMH__) {
-                        idx_it.next(*this, __on_miss__);
-                        vec_it.next(*this, __on_miss__);
-                    }
-
-                    void next() {
-                        idx_it.next(*this);
-                        vec_it.next(*this);
-                    }
-
-                    void next_idx_group() { idx_it.next_group(*this); }
-
-                    void next_vec() { vec_it.next(*this); }
-
-                    Scope(DereferenceScope *scope) : DereferenceScope(scope) {}
-                } scp(&scope);
-                const size_t idx_start = i * block;
-                const size_t idx_end = std::min(idx_start + block, vec_size);
-                if (idx_start >= idx_end) [[unlikely]] {
-                    return;
+    // auto start = get_cycles();
+    const size_t thread_cnt = alg == UTHREAD
+                                  ? uthread::get_thread_count() * UTH_FACTOR
+                                  : uthread::get_thread_count();
+    // aligned to group
+    const size_t block = (idx_vec.groups_count() + thread_cnt - 1) /
+                         thread_cnt * idx_vec.GROUP_SIZE;
+    // std::cout << "block size: " << block << ", thread count: " <<
+    // thread_cnt
+    //           << std::endl;
+    // profile::reset_all();
+    uthread::parallel_for_with_scope<1>(
+        thread_cnt, thread_cnt, [&](size_t i, DereferenceScope &scope) {
+            ON_MISS_BEGIN
+            ON_MISS_END
+            using idx_it_t = decltype(idx_vec.clbegin());
+            using vec_it_t = decltype(vec.lbegin());
+            using acc_t = decltype(at(0, scope, __on_miss__));
+            struct Scope : public DereferenceScope {
+                idx_it_t idx_it;
+                vec_it_t vec_it;
+                acc_t acc;
+                void pin() const override {
+                    idx_it.pin();
+                    vec_it.pin();
+                    acc.pin();
                 }
-                // printf("[%lu, %lu)\n", idx_start, idx_end);
-                assert(idx_start % idx_vec.GROUP_SIZE == 0);
-                if constexpr (alg == UTHREAD) {
-                    ON_MISS_BEGIN
-                        uthread::yield();
-                    ON_MISS_END
+                void unpin() const override {
+                    idx_it.unpin();
+                    vec_it.unpin();
+                    acc.unpin();
+                }
+                void next(__DMH__) {
+                    idx_it.next(*this, __on_miss__);
+                    vec_it.next(*this, __on_miss__);
+                }
+                void next() {
+                    idx_it.next(*this);
+                    vec_it.next(*this);
+                }
+                void next_idx_group() { idx_it.next_group(*this); }
+                void next_vec() { vec_it.next(*this); }
+                Scope(DereferenceScope *scope) : DereferenceScope(scope) {}
+            } scp(&scope);
+            const size_t idx_start = i * block;
+            const size_t idx_end = std::min(idx_start + block, vec_size);
+            if (idx_start >= idx_end) [[unlikely]] {
+                return;
+            }
+            // printf("[%lu, %lu)\n", idx_start, idx_end);
+            assert(idx_start % idx_vec.GROUP_SIZE == 0);
+            if constexpr (alg == UTHREAD) {
+                ON_MISS_BEGIN
+                    uthread::yield();
+                ON_MISS_END
+                scp.idx_it = idx_vec.get_const_lite_iter(
+                    idx_start, scp, __on_miss__, idx_start, idx_end);
+                scp.vec_it = vec.get_lite_iter(idx_start, scp, __on_miss__,
+                                               idx_start, idx_end);
+                for (size_t idx = idx_start; idx < idx_end;
+                     idx++, scp.next(__on_miss__)) {
+                    scp.acc = at(*(scp.idx_it), scp, __on_miss__);
+                    *(scp.vec_it) = *(scp.acc);
+                }
+            } else if constexpr (alg == PREFETCH || alg == PARAROUTINE) {
+                if constexpr (alg == PREFETCH) {
                     scp.idx_it = idx_vec.get_const_lite_iter(
-                        idx_start, scp, __on_miss__, idx_start, idx_end);
-                    scp.vec_it = vec.get_lite_iter(idx_start, scp, __on_miss__,
+                        idx_start, scp, idx_start, idx_end);
+                    scp.vec_it = vec.get_lite_iter(idx_start, scp,
                                                    idx_start, idx_end);
+                    ON_MISS_BEGIN
+                    ON_MISS_END
                     for (size_t idx = idx_start; idx < idx_end;
-                         idx++, scp.next(__on_miss__)) {
-                        scp.acc = at(*(scp.idx_it), scp, __on_miss__);
-                        *(scp.vec_it) = *(scp.acc);
-                    }
-                } else if constexpr (alg == PREFETCH || alg == PARAROUTINE) {
-                    if constexpr (alg == PREFETCH) {
-                        scp.idx_it = idx_vec.get_const_lite_iter(
-                            idx_start, scp, idx_start, idx_end);
-                        scp.vec_it = vec.get_lite_iter(idx_start, scp,
-                                                       idx_start, idx_end);
-                        ON_MISS_BEGIN
-                        ON_MISS_END
-                        for (size_t idx = idx_start; idx < idx_end;
-                             idx += idx_vec.GROUP_SIZE, scp.next_idx_group()) {
-                            auto &idx_group = *scp.idx_it.get_group_accessor();
-                            for (size_t ii = 0;
-                                 ii <
-                                 std::min(idx_vec.GROUP_SIZE, idx_end - idx);
-                                 ii++, scp.next_vec()) {
-                                scp.acc = at(idx_group[ii], scp, __on_miss__);
-                                *(scp.vec_it) = *(scp.acc);
-                            }
+                         idx += idx_vec.GROUP_SIZE, scp.next_idx_group()) {
+                        auto &idx_group = *scp.idx_it.get_group_accessor();
+                        for (size_t ii = 0;
+                             ii <
+                             std::min(idx_vec.GROUP_SIZE, idx_end - idx);
+                             ii++, scp.next_vec()) {
+                            scp.acc = at(idx_group[ii], scp, __on_miss__);
+                            *(scp.vec_it) = *(scp.acc);
                         }
-                    } else {
-                        // pararoutine
-                        using it_t = decltype(clbegin());
-                        struct Context {
-                            idx_it_t idx_it;
-                            vec_it_t vec_it;
-                            it_t it;
-                            const Self *self;
-                            size_t idx_start;
-                            size_t idx_end;
-                            size_t ii;
-
-                            bool has_start;
-                            bool in_loop;
-                            bool vec_at_local;
-                            bool it_at_local;
-
-                            void pin() {
-                                idx_it.pin();
-                                vec_it.pin();
-                                it.pin();
-                            }
-
-                            void unpin() {
-                                idx_it.unpin();
-                                vec_it.unpin();
-                                it.unpin();
-                            }
-
-                            bool fetched() {
-                                if (in_loop) {
-                                    if (vec_it.at_local() && it.at_local()) {
-                                        vec_it.sync_accessor();
-                                        it.sync_accessor();
-                                        return true;
-                                    }
-                                    return false;
-                                } else {
-                                    if (idx_it.at_local()) {
-                                        idx_it.sync_accessor();
-                                        return true;
-                                    }
-                                    return false;
-                                }
-                            }
-
-                            bool run(DereferenceScope &scope) {
-                                if (in_loop) [[likely]] {
-                                    goto next;
-                                }
-                                if (has_start) [[likely]] {
-                                    goto loop;
-                                }
-                                has_start = true;
-                                if (!idx_it.async_fetch(scope)) {
-                                    return false;
-                                }
-                            loop:
-                                in_loop = true;
-                                for (ii = this->idx_start; ii < this->idx_end;
-                                     ii++, vec_it.next()) {
-                                    vec_at_local = vec_it.async_fetch(scope);
-                                    // std::cout
-                                    //     << (*idx_it.get_group_accessor())[ii]
-                                    //     << std::endl;
-                                    it = self->get_const_lite_iter(
-                                        (*idx_it.get_group_accessor())[ii]);
-                                    it_at_local = it.async_fetch(scope);
-                                    if (!(vec_at_local && it_at_local)) {
-                                        return false;
-                                    }
-                                next:
-                                    *vec_it = *it;
-                                }
-                                return true;
-                            }
-                        };
-                        auto idx_it = idx_vec.get_const_lite_iter(
-                            idx_start, scope, __on_miss__, idx_start, idx_end);
-                        auto glb_vec_it = vec.get_lite_iter(
-                            idx_start, scope, __on_miss__, idx_start, idx_end);
-                        SCOPED_INLINE_ASYNC_FOR(
-                            Context, size_t, idx, idx_start, idx < idx_end,
-                            {
-                                // printf("%lu\n", idx_vec.GROUP_SIZE);
-                                idx += idx_vec.GROUP_SIZE;
-                                idx_it.next_group();
-                                glb_vec_it.nextn(idx_vec.GROUP_SIZE);
-                            },
-                            scope)
-                            // std::cout
-                            //     << "[" << idx << ", "
-                            //     << std::min(idx + idx_vec.GROUP_SIZE,
-                            //     idx_end)
-                            //     << std::endl;
-                            return Context{
-                                .idx_it = idx_it,
-                                .vec_it = glb_vec_it,
-                                .self = this,
-                                // block has aligned, start must = 0
-                                .idx_start = 0,
-                                .idx_end =
-                                    std::min(idx_end - idx, idx_vec.GROUP_SIZE),
-                                .has_start = false,
-                                .in_loop = false,
-                            };
-                        SCOPED_INLINE_ASYNC_FOR_END
                     }
                 } else {
-                    ERROR("alg not exist");
+                    // pararoutine
+                    using it_t = decltype(clbegin());
+                    struct Context {
+                        idx_it_t idx_it;
+                        vec_it_t vec_it;
+                        it_t it;
+                        const Self *self;
+                        size_t idx_start;
+                        size_t idx_end;
+                        size_t ii;
+                        bool has_start;
+                        bool in_loop;
+                        bool vec_at_local;
+                        bool it_at_local;
+                        void pin() {
+                            idx_it.pin();
+                            vec_it.pin();
+                            it.pin();
+                        }
+                        void unpin() {
+                            idx_it.unpin();
+                            vec_it.unpin();
+                            it.unpin();
+                        }
+                        bool fetched() {
+                            if (in_loop) {
+                                if (vec_it.at_local() && it.at_local()) {
+                                    vec_it.sync_accessor();
+                                    it.sync_accessor();
+                                    return true;
+                                }
+                                return false;
+                            } else {
+                                if (idx_it.at_local()) {
+                                    idx_it.sync_accessor();
+                                    return true;
+                                }
+                                return false;
+                            }
+                        }
+                        bool run(DereferenceScope &scope) {
+                            if (in_loop) [[likely]] {
+                                goto next;
+                            }
+                            if (has_start) [[likely]] {
+                                goto loop;
+                            }
+                            has_start = true;
+                            if (!idx_it.async_fetch(scope)) {
+                                return false;
+                            }
+                        loop:
+                            in_loop = true;
+                            for (ii = this->idx_start; ii < this->idx_end;
+                                 ii++, vec_it.next()) {
+                                vec_at_local = vec_it.async_fetch(scope);
+                                // std::cout
+                                //     << (*idx_it.get_group_accessor())[ii]
+                                //     << std::endl;
+                                it = self->get_const_lite_iter(
+                                    (*idx_it.get_group_accessor())[ii]);
+                                it_at_local = it.async_fetch(scope);
+                                if (!(vec_at_local && it_at_local)) {
+                                    return false;
+                                }
+                            next:
+                                *vec_it = *it;
+                            }
+                            return true;
+                        }
+                    };
+                    auto idx_it = idx_vec.get_const_lite_iter(
+                        idx_start, scope, __on_miss__, idx_start, idx_end);
+                    auto glb_vec_it = vec.get_lite_iter(
+                        idx_start, scope, __on_miss__, idx_start, idx_end);
+                    SCOPED_INLINE_ASYNC_FOR(
+                        Context, size_t, idx, idx_start, idx < idx_end,
+                        {
+                            // printf("%lu\n", idx_vec.GROUP_SIZE);
+                            idx += idx_vec.GROUP_SIZE;
+                            idx_it.next_group();
+                            glb_vec_it.nextn(idx_vec.GROUP_SIZE);
+                        },
+                        scope)
+                        // std::cout
+                        //     << "[" << idx << ", "
+                        //     << std::min(idx + idx_vec.GROUP_SIZE,
+                        //     idx_end)
+                        //     << std::endl;
+                        return Context{
+                            .idx_it = idx_it,
+                            .vec_it = glb_vec_it,
+                            .self = this,
+                            // block has aligned, start must = 0
+                            .idx_start = 0,
+                            .idx_end =
+                                std::min(idx_end - idx, idx_vec.GROUP_SIZE),
+                            .has_start = false,
+                            .in_loop = false,
+                        };
+                    SCOPED_INLINE_ASYNC_FOR_END
                 }
-            });
-        // profile::print_profile_data();
-        // auto end = get_cycles();
-        // std::cout << "parallel for: " << end - start << std::endl;
-    }
+            } else {
+                ERROR("alg not exist");
+            }
+        });
+    // profile::print_profile_data();
+    // auto end = get_cycles();
+    // std::cout << "parallel for: " << end - start << std::endl;
     // auto ssend = get_cycles();
     // std::cout << "copy data by idx: " << ssend - sstart << std::endl;
     return vec;
 }
-}  // namespace Beehive
+}  // namespace FarLib

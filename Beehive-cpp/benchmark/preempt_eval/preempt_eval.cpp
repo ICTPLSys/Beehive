@@ -20,20 +20,21 @@
 #include "async/stream_runner.hpp"
 #include "cache/cache.hpp"
 #include "data_structure/hopscotch.hpp"
+#include "encrypt.hpp"
 #include "test/fixed_size_string.hpp"
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 #include "utils/threads.hpp"
 #include "utils/zipfian.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 #define DISPLAY_PROGRESS
 
-using str_key_t = FixedSizeString<16>;
-using str_value_t = FixedSizeString<64>;
+using str_key_t = FixedSizeString<32>;
+using str_value_t = FixedSizeString<256>;
 
 struct HopscotchObject {
     str_key_t key;
@@ -76,14 +77,15 @@ public:
         std::chrono::nanoseconds op_speed_reset;
     };
 
-    static constexpr size_t RequestCount = 1024 * 1024;
-    static constexpr size_t DataSizeShift = 20;
+    // static constexpr size_t PairCount = 1024 * 1024;
+    // static constexpr size_t DataSizeShift = 20;
+    // static constexpr size_t DataSize = 1 << DataSizeShift;
+    static constexpr size_t PairCount = 32 * 1024 * 1024;
+    static constexpr size_t DataSizeShift = 27;
     static constexpr size_t DataSize = 1 << DataSizeShift;
 
 public:
     WorkloadA() { init_data(); }
-
-    LocalHashTable* get_local_hash_table() { return &local_hash_table; }
 
     RemoteHashTable* get_remote_hash_table() { return remote_hash_table.get(); }
 
@@ -93,12 +95,12 @@ private:
     void init_data() {
         remote_hash_table =
             std::make_unique<RemoteHashTable>(DataSizeShift + 2);
-        data.reserve(DataSize);
+        data.reserve(PairCount);
 #ifdef DISPLAY_PROGRESS
         std::cout << "Loading Data..." << std::endl;
-        boost::timer::progress_display progress(DataSize);
+        boost::timer::progress_display progress(PairCount);
 #endif
-        for (size_t i = 0; i < DataSize; i++) {
+        for (size_t i = 0; i < PairCount; i++) {
             str_key_t key = str_key_t::random();
             str_value_t value = str_value_t::random();
             ON_MISS_BEGIN
@@ -106,7 +108,6 @@ private:
             auto [accessor, inserted] = remote_hash_table->put(
                 key, sizeof(HopscotchObject), __on_miss__);
             data.push_back({.key = key, .value = value});
-            local_hash_table[key] = value;
             accessor->key = key;
             accessor->value = value;
 #ifdef DISPLAY_PROGRESS
@@ -117,42 +118,32 @@ private:
 
 private:
     std::vector<HopscotchObject> data;
-    LocalHashTable local_hash_table;
     std::unique_ptr<RemoteHashTable> remote_hash_table;
 };
 
-// Workload B: dummy
+// Workload B: encrypt
 class WorkloadB {
-private:
-    std::atomic_size_t value;
+    const char* plaintext =
+        "这是一个较长的文本，用于演示加密操作。这个文本包含了很多字符，"
+        "大约几百个字节。加密文本可以用于多种用途，包括保护敏感信息，"
+        "确保数据的机密性和完整性。在现代信息安全中，加密是非常重要的"
+        "技术手段。我们使用的是RSA加密算法，它是一种非对称加密算法，被广泛"
+        "应用于各种场景中。通过这个例子，我们可以看到如何使用OpenSSL库"
+        "进行加密操作。这个例子不仅展示了加密过程，还包括了时间统计，以"
+        "衡量加密的效率。";
 
 public:
-    WorkloadB() : value(0) {}
+    WorkloadB() {}
 
-    void run() {
-        size_t n = rand() % 1024;
-        value.store(n);
-        if (n == 0) return;
-        while (value.fetch_sub(1) != 1);
-    }
+    void run(RSA* rsa) { RSA_encrypt(plaintext, rsa); }
 };
 
-class Server {
-public:
-    template <typename Request>
-    using RequestQueue =
-        boost::lockfree::spsc_queue<Request, boost::lockfree::capacity<64>>;
-
-protected:
-    std::atomic_bool serving;
-    RequestQueue<WorkloadA::Request> request_queue;
+struct Stats {
     hdr_histogram* hist_in_queue = nullptr;
     hdr_histogram* hist_serve = nullptr;
-    size_t work_b_cnt;
-    WorkloadB& workload_b;
+    std::atomic_size_t work_b_cnt;
 
-public:
-    struct Stats {
+    struct Result {
         int64_t served_count;
         double q_mean;
         int64_t q_p50;
@@ -167,8 +158,8 @@ public:
         size_t work_b_cnt;
     };
 
-    Stats get_stats() {
-        return Stats{
+    Result get_stats() {
+        return Result{
             .served_count = hist_in_queue->total_count,
             .q_mean = hdr_mean(hist_in_queue),
             .q_p50 = hdr_value_at_percentile(hist_in_queue, 50),
@@ -180,12 +171,11 @@ public:
             .s_p90 = hdr_value_at_percentile(hist_serve, 90),
             .s_p95 = hdr_value_at_percentile(hist_serve, 95),
             .s_p99 = hdr_value_at_percentile(hist_serve, 99),
-            .work_b_cnt = work_b_cnt,
+            .work_b_cnt = work_b_cnt.load(),
         };
     }
 
-public:
-    Server(WorkloadB& workload_b) : serving(true), workload_b(workload_b) {
+    Stats() {
         int err;
         err = hdr_init(1, 1'000'000, 3, &hist_in_queue);
         ASSERT(err == 0);
@@ -194,10 +184,39 @@ public:
         work_b_cnt = 0;
     }
 
-    ~Server() {
+    ~Stats() {
         hdr_close(hist_in_queue);
         hdr_close(hist_serve);
     }
+};
+
+struct GlobalState {
+    Stats stats;
+    std::atomic_bool serving = true;
+    RemoteHashTable* hash_table;
+
+    void finish_serving() { serving.store(false); }
+};
+
+class Server {
+public:
+    template <typename Request>
+    using RequestQueue =
+        boost::lockfree::spsc_queue<Request, boost::lockfree::capacity<64>>;
+
+protected:
+    RequestQueue<WorkloadA::Request> request_queue;
+    GlobalState& state;
+    WorkloadB& workload_b;
+    RSA* workload_b_rsa;
+
+public:
+    Server(GlobalState& global_state, WorkloadB& workload_b)
+        : state(global_state), workload_b(workload_b) {
+        workload_b_rsa = RSA_init();
+    }
+
+    ~Server() { RSA_free(workload_b_rsa); }
 
     virtual void serve() = 0;
 
@@ -209,8 +228,8 @@ public:
     }
 
     bool send_request_b() {
-        workload_b.run();
-        work_b_cnt++;
+        workload_b.run(workload_b_rsa);
+        state.stats.work_b_cnt++;
         return true;
     }
 
@@ -218,7 +237,7 @@ public:
 
     virtual void poll() {}
 
-    virtual void finish_serving() { serving.store(false); }
+    virtual void on_finish() {}
 
 protected:
     bool get_request_a(WorkloadA::Request& request,
@@ -238,211 +257,17 @@ protected:
         if constexpr (Check) {
             ASSERT(response.value == *response.expected_value);
         }
-        hdr_record_value(hist_in_queue, response.in_queue_lat_ns);
-        hdr_record_value(hist_serve, response.service_latency_ns);
+        hdr_record_value_atomic(state.stats.hist_in_queue,
+                                response.in_queue_lat_ns);
+        hdr_record_value_atomic(state.stats.hist_serve,
+                                response.service_latency_ns);
     }
 
-    bool is_serving() { return serving.load(std::memory_order::relaxed); }
-};
-
-class DryServer : public Server {
-public:
-    DryServer(WorkloadA& workload_a, WorkloadB& workload_b)
-        : Server(workload_b) {}
-
-    void serve() override {
-        while (is_serving()) {
-            WorkloadA::Request request;
-            WorkloadA::Response response;
-            if (get_request_a(request, response)) {
-                send_response_a<false>(request, response);
-            }
-        }
-    }
-};
-
-template <bool WorkB>
-class LocalServer : public Server {
-public:
-    LocalServer(WorkloadA& workload_a, WorkloadB& workload_b)
-        : Server(workload_b) {
-        hash_table = workload_a.get_local_hash_table();
-    }
-
-    void serve() override {
-        while (is_serving()) {
-            WorkloadA::Request request;
-            WorkloadA::Response response;
-            if (get_request_a(request, response)) {
-                auto it = hash_table->find(request.key);
-                ASSERT(it != hash_table->end());
-                response.value = it->second;
-                send_response_a(request, response);
-            } else if constexpr (WorkB) {
-                send_request_b();
-            }
-        }
-    }
-
-protected:
-    LocalHashTable* hash_table;
-};
-
-class RemotableServer : public Server {
-public:
-    RemotableServer(WorkloadA& workload_a, WorkloadB& workload_b)
-        : Server(workload_b) {
-        hash_table = workload_a.get_remote_hash_table();
-    }
-
-protected:
-    RemoteHashTable* hash_table;
-};
-
-template <bool WorkB>
-class SyncServer : public RemotableServer {
-public:
-    SyncServer(WorkloadA& workload_a, WorkloadB& workload_b)
-        : RemotableServer(workload_a, workload_b) {}
-
-    void serve() override {
-        RootDereferenceScope scope;
-        ON_MISS_BEGIN
-        ON_MISS_END
-        while (is_serving()) {
-            WorkloadA::Request request;
-            WorkloadA::Response response;
-            if (get_request_a(request, response)) {
-                auto accessor =
-                    hash_table->get(request.key, __on_miss__, scope);
-                ASSERT(!accessor.is_null());
-                response.value = accessor->value;
-                send_response_a(request, response);
-            } else if constexpr (WorkB) {
-                send_request_b();
-            }
-        }
-    }
-};
-
-template <bool WorkB>
-class UThreadServer : public RemotableServer {
-public:
-    UThreadServer(WorkloadA& workload_a, WorkloadB& workload_b)
-        : RemotableServer(workload_a, workload_b) {}
-
-    void door_bell() override {
-        uthread::notify(&request_cond, &request_cond_mutex);
-        if constexpr (WorkB) {
-            // uthread preempt, need to impl. in uthread lib
-            if (workb_working.load(std::memory_order::relaxed) &&
-                !signaled.load(std::memory_order::relaxed)) {
-                signaled.store(true, std::memory_order::relaxed);
-                signal::signal(pthread_id);
-            }
-        }
-    }
-
-    void poll() override {
-        if constexpr (WorkB) {
-            if (workb_working.load(std::memory_order::relaxed)) {
-                if (cache::check_cq() != 0) door_bell();
-            }
-        }
-    }
-
-    void finish_serving() override {
-        serving.store(false);
-        uthread::notify_all(&request_cond, &request_cond_mutex);
-    }
-
-    void serve() {
-        pthread_id = pthread_self();
-        std::unique_ptr<uthread::UThread> threads[16];
-        std::unique_ptr<uthread::UThread> b_thread;
-        for (auto& t : threads) {
-            t = uthread::create(serve_a_thread_fn, this);
-        }
-        if constexpr (WorkB) {
-            // low priority
-            b_thread = uthread::create<true>(serve_b_thread_fn, this);
-        }
-        for (auto& t : threads) {
-            uthread::join(std::move(t));
-        }
-        if constexpr (WorkB) {
-            uthread::join(std::move(b_thread));
-        }
-    }
-
-private:
-    static void serve_a_thread_fn(UThreadServer* server) {
-        server->serve_a_thread();
-    }
-
-    static void serve_b_thread_fn(UThreadServer* server) {
-        server->serve_b_thread();
-    }
-
-    void serve_a_thread() {
-        ON_MISS_BEGIN
-            uthread::yield();
-        ON_MISS_END
-        while (is_serving()) {
-            WorkloadA::Request request;
-            WorkloadA::Response response;
-            {
-                RootDereferenceScope scope;
-                while (get_request_a(request, response)) {
-                    auto accessor =
-                        hash_table->get(request.key, __on_miss__, scope);
-                    ASSERT(!accessor.is_null());
-                    response.value = accessor->value;
-                    send_response_a(request, response);
-                }
-            }
-            if (serving.load())
-                uthread::wait(&request_cond, &request_cond_mutex);
-        }
-    }
-
-    void serve_b_thread() {
-        signal::on_sigusr1 = [this] { thread_b_on_signal(); };
-        workb_working.store(true, std::memory_order::relaxed);
-        signaled.store(false, std::memory_order::relaxed);
-        while (is_serving()) {
-            send_request_b();
-            if (signaled.load(std::memory_order::relaxed)) {
-                thread_b_on_signal();
-            }
-        }
-        workb_working.store(false, std::memory_order::relaxed);
-        signal::on_sigusr1 = [] {};
-    }
-
-    void thread_b_on_signal() {
-        signal::disable_signal();
-        workb_working.store(false, std::memory_order::relaxed);
-        signal::on_sigusr1 = [] {};
-        signal::enable_signal();
-        uthread::yield();
-        signal::disable_signal();
-        signal::on_sigusr1 = [this] { thread_b_on_signal(); };
-        workb_working.store(true, std::memory_order::relaxed);
-        signaled.store(false, std::memory_order::relaxed);
-        signal::enable_signal();
-    }
-
-private:
-    uthread::Condition request_cond;
-    uthread::Mutex request_cond_mutex;
-    std::atomic_bool workb_working = false;
-    std::atomic_bool signaled = false;
-    pthread_t pthread_id;
+    bool is_serving() { return state.serving.load(std::memory_order::relaxed); }
 };
 
 template <bool WorkB, bool Preempt = false>
-class PararoutineServer : public RemotableServer {
+class PararoutineServer : public Server {
     friend class WorkloadABaseContext;
     friend class WorkloadAReqStream;
     struct WorkloadABaseContext {
@@ -450,10 +275,10 @@ class PararoutineServer : public RemotableServer {
         WorkloadA::Request request;
         WorkloadA::Response response;
 
-        RemoteHashTable* get_this() { return server->hash_table; }
+        RemoteHashTable* get_this() { return server->state.hash_table; }
         const str_key_t& get_key() const { return request.key; }
         void make_result(LiteAccessor<HopscotchObject>&& result) {
-            ASSERT(!result.is_null());
+            if (result.is_null()) return;
             response.value = result->value;
             server->send_response_a(request, response);
         }
@@ -478,8 +303,8 @@ class PararoutineServer : public RemotableServer {
     };
 
 public:
-    PararoutineServer(WorkloadA& workload_a, WorkloadB& workload_b)
-        : RemotableServer(workload_a, workload_b) {}
+    PararoutineServer(GlobalState& global_state, WorkloadB& workload_b)
+        : Server(global_state, workload_b) {}
 
     void serve() override {
         if constexpr (WorkB) {
@@ -495,8 +320,8 @@ public:
 
     void door_bell() override {
         if constexpr (WorkB && Preempt) {
-            if (workb_working.load(std::memory_order::relaxed) &&
-                !signaled.load(std::memory_order::relaxed)) {
+            pthread_t pthread_id = low_p_routine_pthread_id.load();
+            if (pthread_id != 0 && !signaled.load(std::memory_order::relaxed)) {
                 signaled.store(true, std::memory_order::relaxed);
                 signal::signal(pthread_id);
             }
@@ -505,7 +330,8 @@ public:
 
     void poll() override {
         if constexpr (WorkB) {
-            if (workb_working.load(std::memory_order::relaxed)) {
+            if (low_p_routine_pthread_id.load(std::memory_order::relaxed) !=
+                0) {
                 if (cache::check_cq() != 0) door_bell();
             }
             if constexpr (Preempt) {
@@ -544,8 +370,9 @@ private:
                 set_timer(ddl - 1000);
             }
             signal::on_sigusr1 = [this, &runner] {
-                if (workb_working.load(std::memory_order::relaxed)) {
-                    workb_working.store(false, std::memory_order::relaxed);
+                if (low_p_routine_pthread_id.load() != 0) {
+                    low_p_routine_pthread_id.store(0,
+                                                   std::memory_order::relaxed);
                     set_timer(0);  // timer off
                 resume:
                     runner.resume();
@@ -553,19 +380,19 @@ private:
                         if (ddl - 2000 < get_time_ns()) goto resume;
                         set_timer(ddl - 2000);
                     }
-                    workb_working.store(true, std::memory_order::relaxed);
+                    low_p_routine_pthread_id.store(pthread_self(),
+                                                   std::memory_order::relaxed);
                     signaled.store(false, std::memory_order::relaxed);
                 }
             };
-            pthread_id = pthread_self();
-            workb_working.store(true, std::memory_order::relaxed);
+            low_p_routine_pthread_id = pthread_self();
             while (is_serving()) {
                 send_request_b();
                 if (signaled.load(std::memory_order::relaxed)) {
                     signal::on_sigusr1();
                 }
             }
-            workb_working.store(false, std::memory_order::relaxed);
+            low_p_routine_pthread_id = 0;
             signal::on_sigusr1 = [] {};
         }
     }
@@ -584,10 +411,127 @@ private:
     }
 
 private:
-    std::atomic_bool workb_working = false;
+    std::atomic<pthread_t> low_p_routine_pthread_id = 0;
     std::atomic_bool signaled = false;
-    pthread_t pthread_id;
     std::atomic_uint64_t timer = 0;
+};
+
+template <bool WorkB>
+class UThreadServer : public Server {
+public:
+    UThreadServer(GlobalState& global_state, WorkloadB& workload_b)
+        : Server(global_state, workload_b) {}
+
+    void door_bell() override {
+        uthread::notify(&request_cond, &request_cond_mutex);
+        if constexpr (WorkB) {
+            // uthread preempt, need to impl. in uthread lib
+            pthread_t pthread_id = low_p_routine_pthread_id.load();
+            if (pthread_id != 0 && !signaled.load(std::memory_order::relaxed)) {
+                signaled.store(true, std::memory_order::relaxed);
+                signal::signal(pthread_id);
+            }
+        }
+    }
+
+    void poll() override {
+        if constexpr (WorkB) {
+            if (low_p_routine_pthread_id.load(std::memory_order::relaxed) !=
+                0) {
+                if (cache::check_cq() != 0) door_bell();
+            }
+        }
+    }
+
+    void on_finish() override {
+        uthread::notify_all(&request_cond, &request_cond_mutex);
+    }
+
+    void serve() {
+        (void)signal::signal_manager;
+        low_p_routine_pthread_id = pthread_self();
+        std::unique_ptr<uthread::UThread> threads[16];
+        std::unique_ptr<uthread::UThread> b_thread;
+        for (auto& t : threads) {
+            t = uthread::create(serve_a_thread_fn, this);
+        }
+        if constexpr (WorkB) {
+            // low priority
+            b_thread = uthread::create<true>(serve_b_thread_fn, this);
+        }
+        for (auto& t : threads) {
+            uthread::join(std::move(t));
+        }
+        if constexpr (WorkB) {
+            uthread::join(std::move(b_thread));
+        }
+    }
+
+private:
+    static void serve_a_thread_fn(UThreadServer* server) {
+        server->serve_a_thread();
+    }
+
+    static void serve_b_thread_fn(UThreadServer* server) {
+        server->serve_b_thread();
+    }
+
+    void serve_a_thread() {
+        ON_MISS_BEGIN
+            uthread::yield();
+        ON_MISS_END
+        while (is_serving()) {
+            WorkloadA::Request request;
+            WorkloadA::Response response;
+            {
+                RootDereferenceScope scope;
+                while (get_request_a(request, response)) {
+                    auto accessor =
+                        state.hash_table->get(request.key, __on_miss__, scope);
+                    ASSERT(!accessor.is_null());
+                    response.value = accessor->value;
+                    send_response_a(request, response);
+                }
+            }
+            if (state.serving.load())
+                uthread::wait(&request_cond, &request_cond_mutex);
+        }
+    }
+
+    void serve_b_thread() {
+        // signal::on_sigusr1 = [this] { thread_b_on_signal(); };
+        low_p_routine_pthread_id.store(pthread_self(),
+                                       std::memory_order::relaxed);
+        signaled.store(false, std::memory_order::relaxed);
+        while (is_serving()) {
+            send_request_b();
+            if (signaled.load(std::memory_order::relaxed)) {
+                thread_b_on_signal();
+            }
+        }
+        low_p_routine_pthread_id.store(0, std::memory_order::relaxed);
+        // signal::on_sigusr1 = [] {};
+    }
+
+    void thread_b_on_signal() {
+        signal::disable_signal();
+        low_p_routine_pthread_id.store(0, std::memory_order::relaxed);
+        // signal::on_sigusr1 = [] {};
+        signal::enable_signal();
+        uthread::yield();
+        signal::disable_signal();
+        // signal::on_sigusr1 = [this] { thread_b_on_signal(); };
+        low_p_routine_pthread_id.store(pthread_self(),
+                                       std::memory_order::relaxed);
+        signaled.store(false, std::memory_order::relaxed);
+        signal::enable_signal();
+    }
+
+private:
+    uthread::Condition request_cond;
+    uthread::Mutex request_cond_mutex;
+    std::atomic<pthread_t> low_p_routine_pthread_id = 0;
+    std::atomic_bool signaled = false;
 };
 
 uint64_t WorkloadA::gen_requests(Server& server, const Config& config) {
@@ -598,7 +542,7 @@ uint64_t WorkloadA::gen_requests(Server& server, const Config& config) {
     assert(op_duration_ns < max_runtime_ns);
     std::default_random_engine random_engine(std::random_device{}());
     std::exponential_distribution req_interval_dist(1.0 / op_duration_ns);
-    ZipfianGenerator<false> idx_generator(DataSize, config.zipfian_constant);
+    ZipfianGenerator<false> idx_generator(PairCount, config.zipfian_constant);
     uint64_t period_start_time = get_time_ns();
     uint64_t final_deadline = period_start_time + max_runtime_ns;
     uint64_t period_deadline = period_start_time + op_speed_reset_ns;
@@ -641,17 +585,46 @@ const char* const ColumnNames[] = {
 constexpr size_t ColumnWidth = 12;
 constexpr size_t ColumnCount = sizeof(ColumnNames) / sizeof(*ColumnNames);
 
-void run(const char* name, Server* server, WorkloadA* workload_a,
-         const WorkloadA::Config& config) {
+template <typename ServerType>
+void __run(const char* name, WorkloadA& workload_a, WorkloadB& workload_b,
+           const WorkloadA::Config& config) {
+    GlobalState global_state;
+    global_state.hash_table = workload_a.get_remote_hash_table();
     void (*serve_fn)(Server*) = [](Server* s) { s->serve(); };
-    auto server_thread = uthread::create(serve_fn, server);
+
+    constexpr size_t N = 8;
+    ServerType* servers = (ServerType*)malloc(sizeof(ServerType) * N);
+    for (size_t i = 0; i < N; i++) {
+        std::construct_at(servers + i, global_state, workload_b);
+    }
+    std::unique_ptr<uthread::UThread> server_threads[N];
+    for (size_t i = 0; i < N; i++) {
+        server_threads[i] = uthread::create(serve_fn, (Server*)&(servers[i]));
+    }
+
+    std::atomic_size_t req_count = 0;
+    std::function<void(size_t)> client_fn = [&](size_t i) {
+        req_count += workload_a.gen_requests(servers[i], config);
+    };
     uint64_t start_ns = get_time_ns();
-    uint64_t req_count = workload_a->gen_requests(*server, config);
+    uthread::fork_join(N, client_fn);
     uint64_t end_ns = get_time_ns();
-    server->finish_serving();
-    uthread::join(std::move(server_thread));
+
+    global_state.finish_serving();
+    for (size_t i = 0; i < 100; i++) {
+        for (size_t i = 0; i < N; i++) {
+            servers[i].on_finish();
+        }
+    }
+    for (auto& t : server_threads) {
+        uthread::join(std::move(t));
+    }
+    for (size_t i = 0; i < N; i++) {
+        std::destroy_at(servers + i);
+    }
+
     double run_time = (double)(end_ns - start_ns) / 1e9;
-    auto stats = server->get_stats();
+    auto stats = global_state.stats.get_stats();
     std::cout << std::setw(ColumnWidth) << name;
     std::cout << std::setw(ColumnWidth) << run_time;
     std::cout << std::setw(ColumnWidth) << req_count;
@@ -684,47 +657,33 @@ void run() {
     std::cout << std::endl;
 
     WorkloadA::Config config{
-        .zipfian_constant = 0,
+        .zipfian_constant = 0.99,
         .max_request_count = 50'000'000,
         .max_runtime = 10s,
         .op_duration = 2us,
-        .op_speed_reset = 10ms,
+        .op_speed_reset = 100ms,
     };
-    // constexpr double ZipfianConstants[] = {0, 0.5, 0.8, 0.99};
-    constexpr double ZipfianConstants[] = {0.5};
-    constexpr std::chrono::nanoseconds OpDurations[] = {
-        10us,   8us,    6us,    5us,    4000ns, 3500ns, 3000ns,
-        2500ns, 2000ns, 1500ns, 1000ns, 900ns,  800ns,  700ns};
-
-#define RUN(NAME, SERVER)                        \
-    {                                            \
-        SERVER server(workload_a, workload_b);   \
-        run(NAME, &server, &workload_a, config); \
-    }
+    constexpr double ZipfianConstants[] = {0.99};
+    // rps = [100, 200, 300, 400, 500, 600, 700, 800] # Kops
+    const std::chrono::duration<double, std::nano> OpDurations[] = {
+        16.0us, 8.0us, 5.3us, 4.0us, 3.2us, 2.7us, 2.3us, 2.0us};
 
     for (double z : ZipfianConstants) {
         for (auto d : OpDurations) {
             std::cout << "zipfian constant: " << z << std::endl;
             config.zipfian_constant = z;
             std::cout << "op duration: " << d.count() << " ns" << std::endl;
-            config.op_duration = d;
+            config.op_duration =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(d);
 
-            // RUN("dry", DryServer);
-            // RUN("local-a", LocalServer<false>);
-            // RUN("local-b", LocalServer<true>);
-            // RUN("sync-a", SyncServer<false>);
-            // RUN("sync-b", SyncServer<true>);
-            RUN("uthread-a", UThreadServer<false>);
-            RUN("uthread-ab", UThreadServer<true>);
-            RUN("pr-a", PararoutineServer<false>);
-            RUN("pr-ab-np", PrAB<false>);
-            RUN("pr-ab-p", PrAB<true>);
+            // __run<PrAB<false>>("no-preempt", workload_a, workload_b, config);
+            // __run<PrAB<true>>("preempt", workload_a, workload_b, config);
+            __run<UThreadServer<true>>("uthread", workload_a, workload_b,
+                                       config);
 
             std::cout << std::endl;
         }
     }
-
-#undef RUN
 }
 
 int main(int argc, char* argv[]) {
@@ -735,7 +694,6 @@ int main(int argc, char* argv[]) {
 
     Configure config;
     config.from_file(argv[1]);
-    config.max_thread_cnt = 2;
     runtime_init(config);
     run();
     runtime_destroy();

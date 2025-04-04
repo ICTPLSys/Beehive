@@ -1,24 +1,22 @@
 #pragma once
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
-#include "object.hpp"
 #include "utils/debug.hpp"
 #define REMOTE_REGION_ALLOCATOR
 
 #ifdef REMOTE_REGION_ALLOCATOR
 #include "cache/region_remote_allocator.hpp"
 #endif
-namespace Beehive {
+namespace FarLib {
 
 namespace cache {
 
 #ifdef REMOTE_REGION_ALLOCATOR
-using Beehive::allocator::remote::InvalidRemoteAddr;
-using Beehive::allocator::remote::remote_global_heap;
-using Beehive::allocator::remote::remote_thread_heap;
+using FarLib::allocator::remote::InvalidRemoteAddr;
+using FarLib::allocator::remote::remote_global_heap;
+using FarLib::allocator::remote::remote_thread_heap;
 class RemoteAllocator {
 public:
     RemoteAllocator(size_t buffer_size) {
@@ -63,4 +61,4 @@ public:
 #endif
 }  // namespace cache
 
-}  // namespace Beehive
+}  // namespace FarLib

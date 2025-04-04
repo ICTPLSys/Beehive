@@ -5,7 +5,7 @@
 #define FORCE_INLINE inline __attribute__((always_inline))
 // #define FORCE_INLINE
 #endif
-namespace Beehive {
+namespace FarLib {
 template <VecElementType T, size_t GroupSize>
 template <bool Mut>
 class FarVector<T, GroupSize>::LiteIterator : public GenericIterator<Mut> {
@@ -25,8 +25,6 @@ public:
     uint64_t prefetch_success_cnt = 0;
     uint64_t miss_cnt = 0;
 
-    ~LiteIterator() { Beehive::profile::count_prefetch(prefetch_cnt); }
-
 private:
     LiteAccessor<Group, Mut> lite_accessor;
     /* update LiteIterator's accessor
@@ -45,21 +43,10 @@ private:
             }
             if constexpr (Prefetch) {
                 ON_MISS_BEGIN
-                    miss_cnt++;
-                    // profile::tlpd.data_miss_count++;
-                    const InIteratorType *lim =
-                        std::max(this->fetch_begin,
-                                 (const InIteratorType *)(this->cursor) -
-                                     PREFETCH_COUNT);
-                    cache::OnMissScope oms(__entry__, &scope);
-                    for (InIteratorType *obj_p = this->cursor - 1; obj_p >= lim;
-                         obj_p--) {
-                        prefetch_cnt++;
-                        auto res =
-                            Cache::get_default()->prefetch(obj_p->obj(), oms);
-                        if (res == Beehive::cache::FetchState::FETCH_ENQUEUE) {
-                            prefetch_success_cnt++;
-                        }
+                    __define_oms__(scope);
+                    for (InIteratorType *obj_p = this->cursor - 1;
+                         obj_p >= this->fetch_begin; obj_p--) {
+                        Cache::get_default()->prefetch(obj_p->obj(), oms);
                         if (Cache::get_default()->check_fetch(__entry__,
                                                               __ddl__)) {
                             return;
@@ -83,22 +70,10 @@ private:
             }
             if constexpr (Prefetch) {
                 ON_MISS_BEGIN
-                    miss_cnt++;
-
-                    // profile::tlpd.data_miss_count++;
-                    const InIteratorType *lim =
-                        std::min(this->fetch_end,
-                                 (const InIteratorType *)(this->cursor) +
-                                     PREFETCH_COUNT);
-                    cache::OnMissScope oms(__entry__, &scope);
-                    for (InIteratorType *obj_p = this->cursor + 1; obj_p < lim;
-                         obj_p++) {
-                        prefetch_cnt++;
-                        auto res =
-                            Cache::get_default()->prefetch(obj_p->obj(), oms);
-                        if (res == Beehive::cache::FetchState::FETCH_ENQUEUE) {
-                            prefetch_success_cnt++;
-                        }
+                    __define_oms__(scope);
+                    for (InIteratorType *obj_p = this->cursor + 1;
+                         obj_p < this->fetch_end; obj_p++) {
+                        Cache::get_default()->prefetch(obj_p->obj(), oms);
                         if (Cache::get_default()->check_fetch(__entry__,
                                                               __ddl__)) {
                             return;
@@ -139,12 +114,8 @@ private:
                     cache::OnMissScope oms(__entry__, &scope);
                     for (InIteratorType *obj_p = this->cursor - 1; obj_p >= lim;
                          obj_p--) {
-                        prefetch_cnt++;
                         auto res =
                             Cache::get_default()->prefetch(obj_p->obj(), oms);
-                        if (res == Beehive::cache::FetchState::FETCH_ENQUEUE) {
-                            prefetch_success_cnt++;
-                        }
                         if (Cache::get_default()->check_fetch(__entry__,
                                                               __ddl__)) {
                             return;
@@ -178,12 +149,8 @@ private:
                     cache::OnMissScope oms(__entry__, &scope);
                     for (InIteratorType *obj_p = this->cursor + 1; obj_p < lim;
                          obj_p++) {
-                        prefetch_cnt++;
                         auto res =
                             Cache::get_default()->prefetch(obj_p->obj(), oms);
-                        if (res == Beehive::cache::FetchState::FETCH_ENQUEUE) {
-                            prefetch_success_cnt++;
-                        }
                         if (Cache::get_default()->check_fetch(__entry__,
                                                               __ddl__)) {
                             return;
@@ -489,4 +456,4 @@ public:
         return lite_accessor;
     }
 };
-}  // namespace Beehive
+}  // namespace FarLib

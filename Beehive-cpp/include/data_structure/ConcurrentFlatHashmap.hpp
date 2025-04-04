@@ -7,7 +7,7 @@
 
 #include "utils/spinlock.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 /*
     Key and Val should have a small size
@@ -696,4 +696,4 @@ public:
     }
 };
 
-}  // namespace Beehive
+}  // namespace FarLib

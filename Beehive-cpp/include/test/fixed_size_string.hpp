@@ -6,7 +6,7 @@
 #include <functional>
 #include <string_view>
 
-namespace Beehive {
+namespace FarLib {
 
 template <size_t Size>
 struct FixedSizeString {
@@ -42,12 +42,12 @@ struct FixedSizeString {
     std::string_view view() const { return {str.data(), str.size()}; }
 };
 
-}  // namespace Beehive
+}  // namespace FarLib
 
 template <size_t Size>
-struct std::hash<Beehive::FixedSizeString<Size>> {
+struct std::hash<FarLib::FixedSizeString<Size>> {
     std::size_t operator()(
-        const Beehive::FixedSizeString<Size>& str) const noexcept {
+        const FarLib::FixedSizeString<Size>& str) const noexcept {
         return std::hash<std::string_view>{}(
             std::string_view(str.str.begin(), str.str.end()));
     }

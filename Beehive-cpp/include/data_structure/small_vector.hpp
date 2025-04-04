@@ -13,7 +13,7 @@
 
 #include "dyn_sized_object.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 template <typename T, size_t ChunkSizeInByte = 4096 - allocator::BlockHeadSize>
 class SmallVector {
@@ -179,4 +179,4 @@ public:
     }
 };
 
-}  // namespace Beehive
+}  // namespace FarLib

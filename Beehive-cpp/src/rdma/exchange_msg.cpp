@@ -8,7 +8,7 @@
 
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace tcp {
 
@@ -56,4 +56,4 @@ int connect_to_server(const char *server_addr, const char *server_port) {
 
 }  // namespace tcp
 
-}  // namespace Beehive
+}  // namespace FarLib

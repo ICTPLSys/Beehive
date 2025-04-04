@@ -16,8 +16,8 @@
 #include "utils.hpp"
 
 namespace social_network {
-using str_key_t = Beehive::FixedSizeString<16>;
-using str_value_t = Beehive::FixedSizeString<64>;
+using str_key_t = FarLib::FixedSizeString<16>;
+using str_value_t = FarLib::FixedSizeString<64>;
 class States {
 private:
     static std::unique_ptr<States> default_instance;
@@ -44,15 +44,15 @@ public:
            userid_to_usertimeline_map, postid_to_post_map,
            userid_to_followers_map, userid_to_followees_map, secret);
     }
-    Beehive::ConcurrentHashMap<FixedSizeString<UserNameLen>, UserProfile>
+    FarLib::ConcurrentHashMap<FixedSizeString<UserNameLen>, UserProfile>
         username_to_userprofile_map{NumEntriesShift};
-    Beehive::ConcurrentHashMap<FixedSizeString<FileNameLen>,
-                               FixedSizeString<DataLen>>
+    FarLib::ConcurrentHashMap<FixedSizeString<FileNameLen>,
+                              FixedSizeString<DataLen>>
         filename_to_data_map{NumEntriesShift};
-    Beehive::ConcurrentHashMap<FixedSizeString<ShortenedUrlLen>,
-                               FixedSizeString<UrlLen>>
+    FarLib::ConcurrentHashMap<FixedSizeString<ShortenedUrlLen>,
+                              FixedSizeString<UrlLen>>
         short_to_extended_map{NumEntriesShift};
-    Beehive::ConcurrentHashMap<int64_t, Post> postid_to_post_map{
+    FarLib::ConcurrentHashMap<int64_t, Post> postid_to_post_map{
         NumEntriesShift};
 
     ConcurrentFlatMap<int64_t, Timeline> userid_to_hometimeline_map;

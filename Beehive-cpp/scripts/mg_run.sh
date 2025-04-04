@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
-pushd /path/to/Beehive-cpp/build
+pushd /path/to/FarLib/build
+your_password="password"
 ninja mg
 core=16
 cpu_core_start=24

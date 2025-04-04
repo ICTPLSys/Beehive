@@ -1,6 +1,5 @@
 #pragma once
 #include <array>
-#include <concepts>
 #include <cstddef>
 #include <deque>
 #include <iostream>
@@ -12,7 +11,7 @@
 #include "utils/cpu_cycles.hpp"
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace async {
 /*
     Co-design with dereference scope:
@@ -249,10 +248,10 @@ void for_range(DereferenceScope &scope, size_t start, size_t end,
 }
 
 }  // namespace async
-}  // namespace Beehive
+}  // namespace FarLib
 
 #define SCOPED_INLINE_ASYNC_FOR(CONTEXT, TYPE, I, INIT, COND, STEP, SCOPE) \
-    Beehive::async::ScopedInlineLoopRunner<CONTEXT>::run(          \
+    FarLib::async::ScopedInlineLoopRunner<CONTEXT>::run(          \
         SCOPE, (TYPE)(INIT), [&](TYPE I) { return COND; },  \
                        [&](TYPE &I) { STEP; },              \
                        [&](TYPE I) {

@@ -1,7 +1,7 @@
 #pragma once
 #include "data_structure/far_vector.hpp"
 
-namespace Beehive {
+namespace FarLib {
 template <VecElementType T, size_t GroupSize>
 class FarVector<T, GroupSize>::Pointer {
 public:
@@ -46,18 +46,11 @@ public:
     }
 
     template <bool Mut>
-    Iterator<Mut> get_iterator() {
-        return Iterator<Mut>(
-            ptr, idx, parent.groups_.data(),
-            parent.groups_.data() + (parent.size_ + GroupSize - 1) / GroupSize);
-    }
-
-    template <bool Mut>
-    LiteIterator<Mut> get_iterator(DereferenceScope &scope) {
+    LiteIterator<Mut> get_lite_iterator(DereferenceScope &scope) {
         return LiteIterator<Mut>(
             ptr, idx, parent.groups_.data(),
             parent.groups_.data() + (parent.size_ + GroupSize - 1) / GroupSize,
             scope);
     }
 };
-}  // namespace Beehive
+}  // namespace FarLib

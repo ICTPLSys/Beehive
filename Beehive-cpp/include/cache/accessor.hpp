@@ -1,32 +1,12 @@
 #pragma once
 #include "cache/region_based_allocator.hpp"
+#include "concurrent_cache.hpp"
 #include "scope.hpp"
-#include "selection.hpp"
-
-#ifdef ARRAY_TYPE_CACHE
-#include "local_array_cache.hpp"
-
-namespace Beehive {
-using Cache = cache::ArrayCache;
-}
-
-#elif defined(HASHMAP_TYPE_CACHE)
-#include "local_cache.hpp"
-
-namespace Beehive {
-using Cache = cache::LocalCache;
-}
-#elif defined(CONCURRENT_ARRAY_TYPE_CACHE)
-#include "concurrent_array_cache.hpp"
-
-namespace Beehive {
+namespace FarLib {
 using Cache = cache::ConcurrentArrayCache;
 }
-#else
-#error "Invalid cache type"
-#endif
 
-namespace Beehive {
+namespace FarLib {
 
 namespace cache {
 
@@ -39,9 +19,6 @@ inline size_t check_cq() { return Cache::get_default()->check_cq(); }
 inline bool at_local(far_obj_t obj) {
     return Cache::get_default()->at_local(obj);
 }
-
-template <typename T>
-class Accessor;
 
 template <typename T, bool Mut = false>
 class LiteAccessor;
@@ -107,6 +84,11 @@ public:
             return LiteAccessor<T, Mut>(*this, __on_miss__,
                                         std::forward<Scope>(scope));
         }
+    }
+
+    template <typename Scope>
+    bool prefetch(Scope &&scope) const {
+        return Cache::get_default()->prefetch(obj(), scope);
     }
 
     // !!! this is NOT thread safe
@@ -247,45 +229,11 @@ public:
     static size_t size() { return sizeof(T); }
 
     template <typename... Args>
-    Accessor<T> allocate(Args &&...args) {
+    LiteAccessor<T, true> allocate_lite(DereferenceScope &scope,
+                                        Args &&...args) {
         this->reset();
         auto cache = Cache::get_default();
-        constexpr bool dirty = !(std::is_trivially_constructible<T>::value &&
-                                 sizeof...(Args) == 0);
-        cache->allocate(&entry, sizeof(T), dirty);
-        new (entry.local_addr()) T(std::forward<Args>(args)...);
-        Accessor<T> accessor;
-        accessor.obj = this->obj();
-        accessor.local_ptr = entry.local_addr();
-        return accessor;
-    }
-    Accessor<T> allocate_uninitialized() {
-        this->reset();
-        auto cache = Cache::get_default();
-        cache->allocate(&entry, sizeof(T), false);
-        Accessor<T> accessor;
-        accessor.obj = this->obj();
-        accessor.local_ptr = entry.local_addr();
-        return accessor;
-    }
-
-    template <typename Evictor>
-    Accessor<T> allocate_uninitialized(Evictor &&evictor) {
-        this->reset();
-        auto cache = Cache::get_default();
-        cache->allocate(&entry, sizeof(T), false, evictor);
-        Accessor<T> accessor;
-        accessor.obj = this->obj();
-        accessor.local_ptr = entry.local_addr();
-        return accessor;
-    }
-
-    template <typename Evictor, typename... Args>
-    LiteAccessor<T, true> allocate_lite(Evictor &&evictor, Args &&...args) {
-        this->reset();
-        auto cache = Cache::get_default();
-        cache->template allocate<true>(&entry, sizeof(T), true,
-                                       std::forward<Evictor>(evictor));
+        cache->template allocate<true>(&entry, sizeof(T), true, scope);
         T *p = static_cast<T *>(entry.local_addr());
         std::construct_at(p, std::forward<Args>(args)...);
         LiteAccessor<T, true> accessor;
@@ -294,26 +242,24 @@ public:
         return accessor;
     }
 
-    template <typename Evictor, typename... Args>
-    LiteAccessor<T, false> allocate_lite_uninitialized(Evictor &&evictor) {
+    template <bool Mut = false, typename... Args>
+    LiteAccessor<T, Mut> allocate_lite_uninitialized(DereferenceScope &scope) {
         this->reset();
         auto cache = Cache::get_default();
-        cache->template allocate<true>(&entry, sizeof(T), false,
-                                       std::forward<Evictor>(evictor));
+        cache->template allocate<true>(&entry, sizeof(T), Mut, scope);
         T *p = static_cast<T *>(entry.local_addr());
-        LiteAccessor<T, false> accessor;
+        LiteAccessor<T, Mut> accessor;
         accessor.block = reinterpret_cast<allocator::BlockHead *>(p) - 1;
         accessor.local_ptr = p;
         return accessor;
     }
 
-    template <typename Evictor, typename... Args>
-    LiteAccessor<T, true> allocate_lite_from_busy(Evictor &&evictor,
+    template <typename... Args>
+    LiteAccessor<T, true> allocate_lite_from_busy(DereferenceScope &scope,
                                                   Args &&...args) {
         assert(entry.load_state().state == BUSY);
         auto cache = Cache::get_default();
-        cache->template allocate<true>(&entry, sizeof(T), true,
-                                       std::forward<Evictor>(evictor));
+        cache->template allocate<true>(&entry, sizeof(T), true, scope);
         T *p = static_cast<T *>(entry.local_addr());
         std::construct_at(p, std::forward<Args>(args)...);
         LiteAccessor<T, true> accessor;
@@ -333,31 +279,13 @@ public:
     size_t size() const { return entry.load_state().size; }
     size_t element_count() const { return size() / sizeof(T); }
 
-    Accessor<T[]> allocate(size_t n) {
-        this->reset();
-        auto cache = Cache::get_default();
-        constexpr bool dirty = !std::is_trivially_constructible<T>::value;
-        cache->allocate<false>(&entry, n * sizeof(T), dirty);
-        if constexpr (dirty) {
-            T *base_addr = entry.local_addr();
-            for (size_t i = 0; i < n; i++) {
-                new (base_addr + i) T;
-            }
-        }
-        Accessor<T> accessor;
-        accessor.obj = this->obj();
-        accessor.local_ptr = entry.local_addr();
-        return accessor;
-    }
-
-    template <bool Mut = false, typename Evictor>
-    LiteAccessor<T[], Mut> allocate_lite(size_t n, Evictor &&evictor) {
+    template <bool Mut = false>
+    LiteAccessor<T[], Mut> allocate_lite(size_t n, DereferenceScope &scope) {
         this->reset();
         auto cache = Cache::get_default();
         constexpr bool dirty =
             !std::is_trivially_constructible<T>::value || Mut;
-        cache->allocate<true>(&entry, n * sizeof(T), dirty,
-                              std::forward<Evictor>(evictor));
+        cache->allocate<true>(&entry, n * sizeof(T), dirty, scope);
         if constexpr (dirty) {
             T *base_addr = entry.local_addr();
             for (size_t i = 0; i < n; i++) {
@@ -381,334 +309,9 @@ private:
 public:
     size_t size() const { return entry.load_state().size; }
 
-    Accessor<void> allocate(size_t nbytes);
-
-    template <bool Mut = false, typename Evictor>
-    LiteAccessor<void, Mut> allocate_lite(size_t nbytes, Evictor &&evictor);
-};
-
-template <typename T>
-class Accessor {
-private:
-    far_obj_t obj;
-    void *local_ptr;
-    bool dirty;
-
-private:
-    template <typename U>
-    friend class UniqueFarPtr;
-
-    template <typename U>
-    friend class Accessor;
-
-    template <typename U>
-    friend class ConstAccessor;
-
-public:
-    Accessor() : obj(far_obj_t::null()), local_ptr(nullptr), dirty(false) {}
-
-    Accessor(far_obj_t obj, size_t offset = 0) : obj(obj), dirty(false) {
-        void *p = Cache::get_default()->sync_fetch(obj);
-        local_ptr = static_cast<char *>(p) + offset;
-    }
-
-    Accessor(far_obj_t obj, const DataMissHandler &on_data_miss,
-             size_t offset = 0)
-        : obj(obj), dirty(false) {
-        void *ptr =
-            Cache::get_default()->fetch_with_miss_handler(obj, on_data_miss);
-        local_ptr = static_cast<char *>(ptr) + offset;
-    }
-
-    Accessor(const UniqueFarPtr<T> &uptr) : obj(uptr.obj()), dirty(false) {
-        local_ptr = Cache::get_default()->sync_fetch(obj);
-    }
-
-    Accessor(const UniqueFarPtr<T> &uptr, const DataMissHandler &on_data_miss)
-        : obj(uptr.obj()), dirty(false) {
-        local_ptr =
-            Cache::get_default()->fetch_with_miss_handler(obj, on_data_miss);
-    }
-
-    Accessor(const Accessor<T> &) = delete;
-
-    Accessor(Accessor<T> &&other)
-        : obj(other.obj), local_ptr(other.local_ptr), dirty(other.dirty) {
-        other.obj = far_obj_t::null();
-    }
-
-    Accessor<T> &operator=(Accessor<T> &&other) noexcept {
-        if (!obj.is_null()) {
-            Cache::get_default()->release_cache(obj, dirty);
-        }
-        obj = other.obj;
-        local_ptr = other.local_ptr;
-        dirty = other.dirty;
-        other.obj = far_obj_t::null();
-        return *this;
-    }
-
-    template <typename U>
-    Accessor(Accessor<U> &&other, T *local_ptr)
-        : obj(other.obj), local_ptr(local_ptr), dirty(other.dirty) {
-        other.obj = far_obj_t::null();
-    }
-
-    ~Accessor() {
-        if (!obj.is_null()) {
-            Cache::get_default()->release_cache(obj, dirty);
-        }
-    }
-
-    bool is_null() const { return obj.is_null(); }
-
-    template <typename... Args>
-    static Accessor allocate(Args &&...args) {
-        auto accessor = Accessor<T>();
-        auto cache = Cache::get_default();
-        auto [o, p] = cache->allocate(sizeof(T), true);
-        accessor.obj = o;
-        accessor.local_ptr = p;
-        accessor.dirty = false;
-        if constexpr (!(std::is_trivially_constructible<T>::value &&
-                        sizeof...(Args) == 0)) {
-            accessor.dirty = true;
-        }
-        new (accessor.local_ptr) T(std::forward<Args>(args)...);
-        return accessor;
-    }
-
-    void deallocate() {
-        Cache::get_default()->deallocate<true>(obj);
-        obj = far_obj_t::null();
-    }
-
-    far_obj_t get_obj() const { return obj; }
-
-    T *as_ptr() {
-        dirty = true;
-        return static_cast<T *>(local_ptr);
-    }
-
-    template <typename U>
-    U *cast() {
-        return static_cast<U *>(as_ptr());
-    }
-
-    const T *as_const_ptr() const { return static_cast<T *>(local_ptr); }
-
-    template <typename U>
-    const U *constcast() {
-        return static_cast<const U *>(as_const_ptr());
-    }
-
-    T *operator->() { return as_ptr(); }
-
-    T &operator*() { return *as_ptr(); }
-};
-
-template <>
-class Accessor<void> {
-private:
-    far_obj_t obj;
-    void *local_ptr;
-    bool dirty;
-
-private:
-    template <typename U>
-    friend class Accessor;
-
-    friend class UniqueFarPtr<void>;
-
-public:
-    Accessor() : obj(far_obj_t::null()), local_ptr(nullptr), dirty(false) {}
-
-    Accessor(far_obj_t obj, size_t offset = 0) : obj(obj), dirty(false) {
-        void *p = Cache::get_default()->sync_fetch(obj);
-        local_ptr = static_cast<char *>(p) + offset;
-    }
-
-    Accessor(const Accessor<void> &) = delete;
-
-    template <typename T>
-    Accessor(Accessor<T> &&other)
-        : obj(other.obj), local_ptr(other.local_ptr), dirty(other.dirty) {
-        other.obj = far_obj_t::null();
-    }
-
-    template <typename T>
-    Accessor<void> &operator=(Accessor<T> &&other) noexcept {
-        if (!obj.is_null()) {
-            Cache::get_default()->release_cache(obj, dirty);
-        }
-        obj = other.obj;
-        local_ptr = other.local_ptr;
-        dirty = other.dirty;
-        other.obj = far_obj_t::null();
-        return *this;
-    }
-
-    template <typename T>
-    Accessor(Accessor<T> &&other, void *local_ptr)
-        : obj(other.obj), local_ptr(local_ptr), dirty(other.dirty) {
-        other.obj = far_obj_t::null();
-    }
-
-    ~Accessor() {
-        if (!obj.is_null()) {
-            Cache::get_default()->release_cache(obj, dirty);
-        }
-    }
-
-    static Accessor<void> allocate(size_t size) {
-        auto accessor = Accessor<void>();
-        auto cache = Cache::get_default();
-        auto [o, p] = cache->allocate(size, true);
-        accessor.obj = o;
-        accessor.local_ptr = p;
-        accessor.dirty = false;
-        return accessor;
-    }
-
-    void deallocate() {
-        Cache::get_default()->deallocate<true>(obj);
-        obj = far_obj_t::null();
-    }
-
-    bool is_null() const { return obj.is_null(); }
-
-    far_obj_t get_obj() const { return obj; }
-
-    void *as_ptr() {
-        dirty = true;
-        return local_ptr;
-    }
-
-    template <typename T>
-    T *cast() {
-        return static_cast<T *>(as_ptr());
-    }
-
-    const void *as_const_ptr() const { return local_ptr; }
-
-    template <typename T>
-    const T *constcast() {
-        return static_cast<const T *>(as_const_ptr());
-    }
-};
-
-template <typename T>
-class ConstAccessor {
-private:
-    far_obj_t obj;
-    const void *local_ptr;
-
-private:
-    template <typename U>
-    friend class ConstAccessor;
-
-public:
-    ConstAccessor() : obj(far_obj_t::null()), local_ptr(nullptr) {}
-
-    ConstAccessor(far_obj_t obj, size_t offset = 0) : obj(obj) {
-        void *p = Cache::get_default()->sync_fetch(obj);
-        local_ptr = static_cast<char *>(p) + offset;
-    }
-
-    ConstAccessor(far_obj_t obj, const DataMissHandler &on_data_miss,
-                  size_t offset = 0)
-        : obj(obj) {
-        void *ptr =
-            Cache::get_default()->fetch_with_miss_handler(obj, on_data_miss);
-        local_ptr = static_cast<const char *>(ptr) + offset;
-    }
-
-    ConstAccessor(const UniqueFarPtr<T> &uptr) : obj(uptr.obj()) {
-        local_ptr = Cache::get_default()->sync_fetch(obj);
-    }
-
-    ConstAccessor(const UniqueFarPtr<T> &uptr,
-                  const DataMissHandler &on_data_miss)
-        : obj(uptr.obj()) {
-        local_ptr =
-            Cache::get_default()->fetch_with_miss_handler(obj, on_data_miss);
-    }
-
-    ConstAccessor(const ConstAccessor<T> &) = delete;
-
-    ConstAccessor(ConstAccessor<T> &&other)
-        : obj(other.obj), local_ptr(other.local_ptr) {
-        other.obj = far_obj_t::null();
-    }
-
-    template <typename U>
-    ConstAccessor(ConstAccessor<U> &&other, const T *local_ptr)
-        : obj(other.obj), local_ptr(local_ptr) {
-        other.obj = far_obj_t::null();
-    }
-
-    ~ConstAccessor() {
-        if (!obj.is_null()) {
-            Cache::get_default()->release_cache(obj, false);
-        }
-    }
-
-    ConstAccessor<T> &operator=(ConstAccessor<T> &&other) {
-        if (!obj.is_null()) {
-            Cache::get_default()->release_cache(obj, false);
-        }
-        obj = other.obj;
-        local_ptr = other.local_ptr;
-        other.obj = far_obj_t::null();
-        return *this;
-    }
-
-    bool is_null() const { return obj.is_null(); }
-
-    far_obj_t get_obj() const { return obj; }
-
-    const T *as_ptr() const { return static_cast<const T *>(local_ptr); }
-
-    template <typename U>
-    const U *cast() {
-        return static_cast<const U *>(as_ptr());
-    }
-
-    const T *operator->() const { return as_ptr(); }
-
-    const T &operator*() const { return *as_ptr(); }
-
-    Accessor<T> as_mut() {
-        Accessor<T> accessor;
-        accessor.obj = obj;
-        accessor.local_ptr = const_cast<void *>(local_ptr);
-        accessor.dirty = false;
-        obj = far_obj_t::null();
-        local_ptr = nullptr;
-        return accessor;
-    }
-
-    bool async_fetch(far_obj_t obj) {
-        if (!this->obj.is_null()) {
-            Cache::get_default()->release_cache(obj, false);
-        }
-        this->obj = obj;
-        auto [at_local, local_addr] = Cache::get_default()->async_fetch(obj);
-        this->local_ptr = local_addr;
-        return at_local;
-    }
-
-    void deallocate() {
-        Cache::get_default()->deallocate<true>(obj);
-        obj = far_obj_t::null();
-    }
-
-    void release_self() {
-        if (!obj.is_null()) [[likely]] {
-            Cache::get_default()->release_cache(obj, false);
-            obj = far_obj_t::null();
-        }
-    }
+    template <bool Mut = false>
+    LiteAccessor<void, Mut> allocate_lite(size_t nbytes,
+                                          DereferenceScope &scope);
 };
 
 // LiteAccessor mut be used in a dereference scope
@@ -750,62 +353,60 @@ public:
     LiteAccessor(allocator::BlockHead *block, void *local_ptr)
         : block(block), local_ptr(static_cast<Pointer>(local_ptr)) {}
 
-    template <typename Evictor>
-    LiteAccessor(far_obj_t obj, Evictor &&evictor) {
+    LiteAccessor(far_obj_t obj, DereferenceScope &scope) {
         ON_MISS_BEGIN
         ON_MISS_END
         void *ptr = Cache::get_default()->template fetch_lite<Mut>(
-            obj, __on_miss__, std::forward<Evictor>(evictor));
+            obj, __on_miss__, scope);
         block = static_cast<allocator::BlockHead *>(ptr) - 1;
         local_ptr = static_cast<T *>(ptr);
         check(block, local_ptr);
     }
 
-    template <typename Evictor>
-    LiteAccessor(far_obj_t obj, __DMH__, Evictor &&evictor) {
+    LiteAccessor(far_obj_t obj, __DMH__, DereferenceScope &scope) {
         void *ptr = Cache::get_default()->template fetch_lite<Mut>(
-            obj, __on_miss__, std::forward<Evictor>(evictor));
+            obj, __on_miss__, scope);
         block = static_cast<allocator::BlockHead *>(ptr) - 1;
         local_ptr = static_cast<T *>(ptr);
         check(block, local_ptr);
     }
 
-    template <typename Impl, typename Evictor>
-    LiteAccessor(const UniqueFarPtrBase<T, Impl> &uptr, Evictor &&evictor) {
+    template <typename Impl>
+    LiteAccessor(const UniqueFarPtrBase<T, Impl> &uptr,
+                 DereferenceScope &scope) {
         ON_MISS_BEGIN
         ON_MISS_END
         void *ptr = Cache::get_default()->template fetch_lite<Mut>(
-            uptr.obj(), __on_miss__, std::forward<Evictor>(evictor));
+            uptr.obj(), __on_miss__, scope);
         block = static_cast<allocator::BlockHead *>(ptr) - 1;
         local_ptr = static_cast<T *>(ptr);
         check(block, local_ptr);
     }
 
-    template <typename Impl, typename Evictor>
+    template <typename Impl>
     LiteAccessor(const UniqueFarPtrBase<T, Impl> &uptr, __DMH__,
-                 Evictor &&evictor) {
+                 DereferenceScope &scope) {
         void *ptr = Cache::get_default()->template fetch_lite<Mut>(
-            uptr.obj(), __on_miss__, std::forward<Evictor>(evictor));
+            uptr.obj(), __on_miss__, scope);
         block = static_cast<allocator::BlockHead *>(ptr) - 1;
         local_ptr = static_cast<T *>(ptr);
         check(block, local_ptr);
     }
 
-    template <typename Evictor>
-    LiteAccessor(const UniqueFarPtr<void> &uptr, Evictor &&evictor) {
+    LiteAccessor(const UniqueFarPtr<void> &uptr, DereferenceScope &scope) {
         ON_MISS_BEGIN
         ON_MISS_END
         void *ptr = Cache::get_default()->template fetch_lite<Mut>(
-            uptr.obj(), __on_miss__, std::forward<Evictor>(evictor));
+            uptr.obj(), __on_miss__, scope);
         block = static_cast<allocator::BlockHead *>(ptr) - 1;
         local_ptr = static_cast<T *>(ptr);
         check(block, local_ptr);
     }
 
-    template <typename Evictor>
-    LiteAccessor(const UniqueFarPtr<void> &uptr, __DMH__, Evictor &&evictor) {
+    LiteAccessor(const UniqueFarPtr<void> &uptr, __DMH__,
+                 DereferenceScope &scope) {
         void *ptr = Cache::get_default()->template fetch_lite<Mut>(
-            uptr.obj(), __on_miss__, std::forward<Evictor>(evictor));
+            uptr.obj(), __on_miss__, scope);
         block = static_cast<allocator::BlockHead *>(ptr) - 1;
         local_ptr = static_cast<T *>(ptr);
         check(block, local_ptr);
@@ -860,20 +461,17 @@ public:
         return *as_ptr();
     }
 
-    template <typename Evictor>
-    bool async_fetch_slow_path(far_obj_t obj, Evictor &&evictor) {
+    bool async_fetch_slow_path(far_obj_t obj, DereferenceScope &scope) {
         auto [at_local, local_addr] =
-            Cache::get_default()->template async_fetch_lite<Mut>(
-                obj, std::forward<Evictor>(evictor));
+            Cache::get_default()->template async_fetch_lite<Mut>(obj, scope);
         this->local_ptr = static_cast<Pointer>(local_addr);
         this->block = static_cast<allocator::BlockHead *>(local_addr) - 1;
         check(block, local_ptr);
         return at_local;
     }
 
-    template <typename Evictor>
     __attribute__((always_inline)) bool async_fetch(far_obj_t obj,
-                                                    Evictor &&evictor) {
+                                                    DereferenceScope &scope) {
         auto entry = obj.get_entry_ptr();
         bool fast = entry->load_state().template is_deref_fast_path<Mut>();
         if (fast) [[likely]] {
@@ -883,14 +481,11 @@ public:
             check(block, local_ptr);
             return true;
         }
-        bool res = async_fetch_slow_path(obj, std::forward<Evictor>(evictor));
-        check(block, local_ptr);
-        return res;
+        return async_fetch_slow_path(obj, scope);
     }
 
-    template <typename Evictor>
     __attribute__((always_inline)) bool async_fetch(const UniqueFarPtr<T> &uptr,
-                                                    Evictor &&evictor) {
+                                                    DereferenceScope &scope) {
         bool fast =
             uptr.get_entry().load_state().template is_deref_fast_path<Mut>();
         if (fast) [[likely]] {
@@ -900,10 +495,7 @@ public:
             check(block, local_ptr);
             return true;
         }
-        bool res =
-            async_fetch_slow_path(uptr.obj(), std::forward<Evictor>(evictor));
-        check(block, local_ptr);
-        return res;
+        return async_fetch_slow_path(uptr.obj(), scope);
     }
 
     void sync() {
@@ -965,15 +557,14 @@ public:
     }
     // unsafe!
     LiteAccessor(allocator::BlockHead *block, void *local_ptr)
-        : block(block), local_ptr(static_cast<Pointer>(local_ptr)) {
-        check(block, local_ptr);
-    }
-    template <typename Impl, typename Evictor>
-    LiteAccessor(const UniqueFarPtrBase<void, Impl> &uptr, Evictor &&evictor) {
+        : block(block), local_ptr(static_cast<Pointer>(local_ptr)) {}
+    template <typename Impl>
+    LiteAccessor(const UniqueFarPtrBase<void, Impl> &uptr,
+                 DereferenceScope &scope) {
         ON_MISS_BEGIN
         ON_MISS_END
         void *ptr = Cache::get_default()->template fetch_lite<Mut>(
-            uptr.obj(), __on_miss__, std::forward<Evictor>(evictor));
+            uptr.obj(), __on_miss__, scope);
         block = static_cast<allocator::BlockHead *>(ptr) - 1;
         local_ptr = ptr;
         check(block, local_ptr);
@@ -1003,12 +594,11 @@ public:
                     static_cast<typename Dest::Pointer>(local_ptr));
     }
 
-    template <typename Evictor>
-    static LiteAccessor<void, Mut> allocate(size_t size, Evictor &&evictor) {
+    static LiteAccessor<void, Mut> allocate(size_t size,
+                                            DereferenceScope &scope) {
         auto accessor = LiteAccessor<void, Mut>();
         auto cache = Cache::get_default();
-        auto [o, p] =
-            cache->allocate<true>(size, Mut, std::forward<Evictor>(evictor));
+        auto [o, p] = cache->allocate<true>(size, Mut, scope);
         accessor.block = static_cast<allocator::BlockHead *>(p) - 1;
         accessor.local_ptr = p;
         return accessor;
@@ -1036,21 +626,18 @@ public:
         mut_accessor.local_ptr = const_cast<void *>(local_ptr);
         return mut_accessor;
     }
-    template <typename Evictor>
-    bool async_fetch_slow_path(far_obj_t obj, Evictor &&evictor) {
+
+    bool async_fetch_slow_path(far_obj_t obj, DereferenceScope &scope) {
         auto [at_local, local_addr] =
-            Cache::get_default()->template async_fetch_lite<Mut>(
-                obj, std::forward<Evictor>(evictor));
+            Cache::get_default()->template async_fetch_lite<Mut>(obj, scope);
         this->local_ptr = static_cast<Pointer>(local_addr);
         this->block = static_cast<allocator::BlockHead *>(local_addr) - 1;
         check(block, local_ptr);
         return at_local;
     }
 
-    template <typename Evictor>
     __attribute__((always_inline)) bool async_fetch(far_obj_t obj,
-                                                    Evictor &&evictor) {
-        profile::count_deref();
+                                                    DereferenceScope &scope) {
         auto entry = obj.get_entry_ptr();
         bool fast = entry->load_state().template is_deref_fast_path<Mut>();
         if (fast) [[likely]] {
@@ -1060,15 +647,11 @@ public:
             check(block, local_ptr);
             return true;
         }
-        bool res = async_fetch_slow_path(obj, std::forward<Evictor>(evictor));
-        check(block, local_ptr);
-        return res;
+        return async_fetch_slow_path(obj, scope);
     }
 
-    template <typename Evictor>
     __attribute__((always_inline)) bool async_fetch(
-        const UniqueFarPtr<void> &uptr, Evictor &&evictor) {
-        profile::count_deref();
+        const UniqueFarPtr<void> &uptr, DereferenceScope &scope) {
         bool fast =
             uptr.get_entry().load_state().template is_deref_fast_path<Mut>();
         if (fast) [[likely]] {
@@ -1078,29 +661,17 @@ public:
             check(block, local_ptr);
             return true;
         }
-        bool res =
-            async_fetch_slow_path(uptr.obj(), std::forward<Evictor>(evictor));
-        check(block, local_ptr);
-        return res;
+        return async_fetch_slow_path(uptr.obj(), scope);
     }
 };
 
-inline Accessor<void> UniqueFarPtr<void>::allocate(size_t nbytes) {
-    this->reset();
-    auto cache = Cache::get_default();
-    cache->allocate<false>(&entry, nbytes, false);
-    Accessor<void> accessor;
-    accessor.obj = this->obj();
-    accessor.local_ptr = entry.local_addr();
-    return accessor;
-}
 
-template <bool Mut, typename Evictor>
+template <bool Mut>
 inline LiteAccessor<void, Mut> UniqueFarPtr<void>::allocate_lite(
-    size_t nbytes, Evictor &&evictor) {
+    size_t nbytes, DereferenceScope &scope) {
     this->reset();
     auto cache = Cache::get_default();
-    cache->allocate<true>(&entry, nbytes, Mut, std::forward<Evictor>(evictor));
+    cache->allocate<true>(&entry, nbytes, Mut, scope);
     LiteAccessor<void, Mut> accessor;
     void *p = entry.local_addr();
     accessor.block = static_cast<allocator::BlockHead *>(p) - 1;
@@ -1108,30 +679,14 @@ inline LiteAccessor<void, Mut> UniqueFarPtr<void>::allocate_lite(
     return accessor;
 }
 
-template <typename T>
-inline bool at_local(const Accessor<T> &accessor) {
-    return at_local(accessor.get_obj());
-}
-
-template <typename T>
-inline bool at_local(const ConstAccessor<T> &accessor) {
-    return at_local(accessor.get_obj());
-}
-
 template <typename T, bool Mut>
 inline bool at_local(const LiteAccessor<T, Mut> &accessor) {
     return at_local(accessor.get_obj());
 }
 
-template <typename T>
-inline bool async_fetch(far_obj_t obj, ConstAccessor<T> &accessor) {
-    return accessor.async_fetch(obj);
-}
-
 inline void check_memory_low(DereferenceScope &scope) {
     auto cache = Cache::get_default();
-    cache->check_memory_low();
-    cache->update_scope(scope);
+    cache->check_memory_low(scope);
 }
 
 inline void DereferenceScope::enter() { Cache::get_default()->enter_scope(); }
@@ -1140,8 +695,6 @@ inline void DereferenceScope::exit() { Cache::get_default()->exit_scope(); }
 
 }  // namespace cache
 
-using cache::Accessor;
-using cache::ConstAccessor;
 using cache::DereferenceScope;
 using cache::far_obj_t;
 using cache::LiteAccessor;
@@ -1150,18 +703,9 @@ using cache::UniqueFarPtr;
 
 static_assert(sizeof(far_obj_t) == sizeof(uint64_t));
 
-template <typename T, typename... Args>
-inline Accessor<T> alloc_obj(Args &&...args) {
-    return Accessor<T>::allocate(std::forward<Args>(args)...);
-}
-
-inline Accessor<void> alloc_uninitialized(size_t size) {
-    return Accessor<void>::allocate(size);
-}
-
 inline LiteAccessor<void, true> alloc_uninitialized(size_t size,
                                                     DereferenceScope &scope) {
     return LiteAccessor<void, true>::allocate(size, scope);
 }
 
-}  // namespace Beehive
+}  // namespace FarLib

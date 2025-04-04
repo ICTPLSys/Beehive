@@ -102,8 +102,12 @@ void DataFrame<I, H>::load_functor_<LHS, Ts...>::operator()(const T& vec)
     using ValueType = typename VecType::value_type;
 
     const size_type col_s = vec.size() >= end ? end : vec.size();
-
-    df.template load_column<ValueType>(name, {vec.begin() + begin, vec.begin() + col_s}, nan_p);
+    if constexpr (std::is_same_v<VecType, FarLib::FarVector<ValueType>>) {
+        RootDereferenceScope scope;
+        df.template load_column<ValueType, size_type>(name, {(size_type)begin, (size_type)col_s}, vec, scope, nan_p);
+    } else {
+        df.template load_column<ValueType>(name, {vec.begin() + begin, vec.begin() + col_s}, nan_p);
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -169,16 +173,14 @@ template <typename F, typename... Ts>
 template <typename T>
 void DataFrame<I, H>::groupby_functor_<F, Ts...>::operator()(const T& vec)
 {
+    if constexpr (!std::is_same_v<F, GroupbyMedian>) {
+        printf("not implemented\n");
+        abort();
+    }
     if (!::strcmp(name, DF_INDEX_COL_NAME)) {
-        auto visitor = functor.template get_aggregator<I, I>();
-
-        visitor.pre();
-        visitor(index_vec.begin() + begin, index_vec.begin() + end, index_vec.begin() + begin,
-                index_vec.begin() + end);
-        visitor.post();
         {
             RootDereferenceScope scope;
-            df.append_index(visitor.get_result(), scope);
+            df.append_index(vec.get_median(scope, 0, vec.size()), scope);
         }
     } else {
         using VecType   = typename std::remove_reference<T>::type;
@@ -187,14 +189,9 @@ void DataFrame<I, H>::groupby_functor_<F, Ts...>::operator()(const T& vec)
         auto visitor              = functor.template get_aggregator<ValueType, I>();
         const std::size_t vec_end = std::min(end, vec.size());
 
-        visitor.pre();
-        visitor(index_vec.begin() + begin, index_vec.begin() + vec_end, vec.begin() + begin,
-                vec.begin() + vec_end);
-        visitor.post();
-
         {
             RootDereferenceScope scope;
-            df.append_column<ValueType>(name, visitor.get_result(), scope,
+            df.append_column<ValueType>(name, vec.get_median(scope, 0, vec_end), scope,
                                         nan_policy::dont_pad_with_nans);
         }
     }
@@ -279,7 +276,7 @@ void DataFrame<I, H>::print_csv_functor_<Ts...>::operator()(const T& vec)
     else
         os << "<N/A>:";
 
-    for (std::size_t i = 0; i < vec.size(); ++i) os << *vec[i] << ',';
+    for (std::size_t i = 0; i < vec.size(); ++i) os << *vec.get_const_lite_iter(i, this->scope) << ',';
     os << '\n';
 
     return;
@@ -331,10 +328,10 @@ void DataFrame<I, H>::print_json_functor_<Ts...>::operator()(const T& vec)
 
     os << "\"D\":[";
     if (!vec.empty()) {
-        _write_json_df_index_(os, *vec[0]);
+        _write_json_df_index_(os, *vec.get_const_lite_iter(0, this->scope));
         for (std::size_t i = 1; i < vec.size(); ++i) {
             os << ',';
-            _write_json_df_index_(os, *vec[i]);
+            _write_json_df_index_(os, *vec.get_const_lite_iter(i, this->scope));
         }
     }
     os << "]}";
@@ -679,11 +676,11 @@ void DataFrame<I, H>::sel_load_functor_<IT, Ts...>::operator()(const T& vec)
 template <typename I, typename H>
 template <Algorithm alg, typename IT, typename... Ts>
 template <typename T>
-void DataFrame<I, H>::alg_sel_load_functor_<alg, IT, Ts...>::operator()(Beehive::FarVector<T>& vec)
+void DataFrame<I, H>::alg_sel_load_functor_<alg, IT, Ts...>::operator()(FarLib::FarVector<T>& vec)
 {
-    using namespace Beehive;
-    using namespace Beehive::cache;
-    using ValueType = typename Beehive::FarVector<T>::value_type;
+    using namespace FarLib;
+    using namespace FarLib::cache;
+    using ValueType = typename FarLib::FarVector<T>::value_type;
 
     df.load_column<alg, T>(name, vec.template copy_data_by_idx<alg>(sel_indices),
                            nan_policy::dont_pad_with_nans);

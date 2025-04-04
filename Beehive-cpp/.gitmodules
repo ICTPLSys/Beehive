@@ -1,8 +1,0 @@
-[submodule "benchmark/DataFrame"]
-	path = benchmark/DataFrame
-	url = git@github.com:FishlifeHH/DataFrame.git
-	branch = dev-fit-new
-[submodule "benchmark/llama"]
-	path = benchmark/llama
-	url = git@github.com:FishlifeHH/llama2.c.git
-	branch = dev-fit

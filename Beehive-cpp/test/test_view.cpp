@@ -17,17 +17,20 @@
 
 static constexpr size_t TEST_SIZE = 1024 * 1024 * 256;
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 void test() {
     std::vector<int> std_vec;
-    Beehive::FarVector<int> far_vec;
-    for (int i = 0; i < TEST_SIZE; i++) {
-        int num = i;
-        std_vec.push_back(num);
-        far_vec.push_back_slow(num);
+    FarLib::FarVector<int> far_vec;
+    {
+        RootDereferenceScope scope;
+        for (int i = 0; i < TEST_SIZE; i++) {
+            int num = i;
+            std_vec.push_back(num);
+            far_vec.push_back(num, scope);
+        }
     }
     ASSERT(std_vec.size() == far_vec.size());
 #ifdef TEST_FILTER_MAP
@@ -45,8 +48,9 @@ void test() {
         auto end = __rdtsc();
         std::cout << "std view time: " << end - start << std::endl;
         start = __rdtsc();
+        RootDereferenceScope scope;
         far_vec.get_view<false>().filter(even).map(square).for_each(
-            [&far_res](int i) { far_res.push_back(i); });
+            [&far_res](int i) { far_res.push_back(i); }, scope);
         end = __rdtsc();
         std::cout << "far view time: " << end - start << std::endl;
         ASSERT(std_res == far_res);
@@ -64,8 +68,9 @@ void test() {
         auto end = __rdtsc();
         std::cout << "std view time: " << end - start << std::endl;
         start = __rdtsc();
+        RootDereferenceScope scope;
         far_vec.get_view<false>().drop(10).for_each(
-            [&far_res](const int i) { far_res.push_back(i); });
+            [&far_res](const int i) { far_res.push_back(i); }, scope);
         end = __rdtsc();
         std::cout << "far view time: " << end - start << std::endl;
     }
@@ -82,8 +87,9 @@ void test() {
         auto end = __rdtsc();
         std::cout << "std view time: " << end - start << std::endl;
         start = __rdtsc();
+        RootDereferenceScope scope;
         far_vec.get_view<false>().take(10).for_each(
-            [&far_res](const int i) { far_res.push_back(i); });
+            [&far_res](const int i) { far_res.push_back(i); }, scope);
         end = __rdtsc();
         std::cout << "far view time: " << end - start << std::endl;
     }
@@ -100,9 +106,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

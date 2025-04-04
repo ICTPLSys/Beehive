@@ -34,8 +34,8 @@
 
 static std::unordered_map<std::string, size_t> tus;
 static std::unordered_map<std::string, size_t> cnts;
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 static constexpr size_t UTHREAD_FACTOR = FarVector<float>::UTHREAD_FACTOR;
 static inline size_t get_thread_count() {
@@ -1456,7 +1456,7 @@ int main(int argc, char* argv[]) {
               << static_cast<double>(config.client_buffer_size) / (1 << 30)
               << "G" << std::endl;
     std::cout << "core count: " << config.max_thread_cnt << std::endl;
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     // perf_init();
     // perf_profile([&] {
     // build the Transformer via the model .bin file
@@ -1491,7 +1491,7 @@ int main(int argc, char* argv[]) {
     prof_res_print();
     profile::print_profile_data();
     // }).print();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
 #ifdef STANDALONE
     server_thread.join();
 #endif

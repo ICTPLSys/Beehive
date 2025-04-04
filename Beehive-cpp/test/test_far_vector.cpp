@@ -10,8 +10,8 @@
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 #define TEST_BASIC
@@ -101,11 +101,14 @@ void build_test_data(std::vector<MyData> &std_vec,
     for (int i = 0; i < TEST_SIZE; i++) {
         std_vec.push_back(MyData::rand_data());
     }
-    for (int i = 0; i < TEST_SIZE; i++) {
-        far_vec.push_back_slow(std_vec[i]);
+    {
+        RootDereferenceScope scope;
+        for (int i = 0; i < TEST_SIZE; i++) {
+            far_vec.push_back(std_vec[i], scope);
+        }
     }
     std_vec.emplace_back('1', 1, 2147483648, 1.23);
-    far_vec.emplace_back_slow('1', 1, 2147483648, 1.23);
+    far_vec.emplace_back('1', 1, 2147483648, 1.23, scope);
     ASSERT(far_vec.size() == TEST_SIZE + 1);
     ASSERT(std_vec.size() == far_vec.size());
 }
@@ -117,8 +120,11 @@ void build_test_data(std::vector<int> &std_vec,
     for (int i = 0; i < TEST_SIZE; i++) {
         std_vec.push_back(rand());
     }
-    for (int i = 0; i < TEST_SIZE; i++) {
-        far_vec.push_back_slow(std_vec[i]);
+    {
+        RootDereferenceScope scope;
+        for (int i = 0; i < TEST_SIZE; i++) {
+            far_vec.push_back(std_vec[i], scope);
+        }
     }
     ASSERT(far_vec.size() == TEST_SIZE);
     ASSERT(std_vec.size() == far_vec.size());
@@ -329,9 +335,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

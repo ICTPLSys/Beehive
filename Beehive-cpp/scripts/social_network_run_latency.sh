@@ -1,12 +1,13 @@
 #!/bin/bash
 set -e
 program_name="socialNetwork"
-pushd /path/to/Beehive-cpp/benchmark/socialNetwork/
+pushd /path/to/FarLib/benchmark/socialNetwork/
+your_password="password"
 core=16
 # local_mem_size=(4 8 15 23 50) # 12.5%, 25%, 50%, 75%, 100%
 local_mem_size=(4) # 12.5%, 25%, 50%, 75%, 100%
 network_name="socfb-A-anon"
-network_file="/mnt/${network_name}.mtx"
+network_file="/path/to/social-network/${network_name}.mtx"
 mode="throughput"
 result_dir=../../results/social-network/latency
 mkdir -p ${result_dir}
@@ -14,7 +15,7 @@ mkdir -p ${result_dir}
 for op_dur_t in 20us 50us
 do
     sed "s/.*op_duration = .*/.op_duration = ${op_dur_t},/g" latency_main.cpp -i
-    pushd /path/to/Beehive-cpp/build
+    pushd /path/to/FarLib/build
     ninja $program_name
     popd
     for i in ${local_mem_size[@]}

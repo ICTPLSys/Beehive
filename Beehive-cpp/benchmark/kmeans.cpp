@@ -2,13 +2,10 @@
 #include <boost/timer/progress_display.hpp>
 #include <cassert>
 #include <chrono>
-#include <cstdint>
 #include <iostream>
 #include <limits>
-#include <memory>
 #include <random>
 #include <set>
-#include <thread>
 #include <vector>
 
 #define USE_FAR_MEMORY
@@ -16,8 +13,8 @@
 // #define PTHREAD_COUNT 16
 // #define UTHREAD_YIELD
 // #define UTHREAD_COUNT 16
-// #define ENABLE_PREFETCH
-#define ENABLE_RUN_AHEAD
+#define ENABLE_PREFETCH
+// #define ENABLE_RUN_AHEAD
 
 #ifdef PTHREAD_YIELD
 constexpr size_t ThreadCount = PTHREAD_COUNT;
@@ -34,13 +31,20 @@ static thread_local size_t thread_idx = 0;
 #ifdef USE_FAR_MEMORY
 #include "cache/cache.hpp"
 #include "data_structure/vector.hpp"
-#include "rdma/client.hpp"
 #include "utils/control.hpp"
 
 #ifdef ENABLE_PREFETCH
 
-#define FOR_EACH(VEC, FN) (VEC).for_each_mut(FN)
-#define CONST_FOR_EACH(VEC, FN) (VEC).for_each_const(FN)
+#define FOR_EACH(VEC, FN)                         \
+    {                                             \
+        FarLib::RootDereferenceScope scope;       \
+        (VEC).template for_each<true>(FN, scope); \
+    }
+#define CONST_FOR_EACH(VEC, FN)             \
+    {                                       \
+        FarLib::RootDereferenceScope scope; \
+        (VEC).for_each(FN, scope);          \
+    }
 
 #elif defined(PTHREAD_YIELD)
 
@@ -253,10 +257,13 @@ private:
         for (size_t t = 0; t < ThreadCount; t++) {
             cluster_sum[t].resize(k);
         }
+#ifdef USE_FAR_MEMORY
+        FarLib::RootDereferenceScope scope;
+#endif
         auto it = indexes.begin();
         for (Cluster &c : clusters) {
 #ifdef USE_FAR_MEMORY
-            c.position = points.get(*it)->position;
+            c.position = points.get_lite(*it, scope)->position;
 #else
             c.position = points[*it].position;
 #endif
@@ -314,7 +321,13 @@ private:
     }
 
 public:
+#ifdef USE_FAR_MEMORY
+    void add_data(const Position &p, FarLib::DereferenceScope &scope) {
+        points.emplace_back(scope, p, 0);
+    }
+#else
     void add_data(const Position &p) { points.emplace_back(p, 0); }
+#endif
 
     void run(size_t k, size_t iteration_count) {
         constexpr double CPU_FREQ = 2800.0;
@@ -339,7 +352,7 @@ private:
     std::vector<ClusterSum> cluster_sum[ThreadCount];
 #ifdef USE_FAR_MEMORY
     static_assert(sizeof(Point) < 4096);
-    Beehive::DenseVector<Point, 4096 / sizeof(Point)> points;
+    FarLib::DenseVector<Point, 4096 / sizeof(Point)> points;
 #else
     std::vector<Point> points;
 #endif
@@ -349,12 +362,21 @@ void run(size_t k, size_t p_count, size_t it_count) {
     KMeans<3> kmeans;
     std::default_random_engine re(0);
     std::uniform_real_distribution<double> dist(0, 1);
-    // std::cout << "Loading Data..." << std::endl;
-    // boost::timer::progress_display show_progress(p_count);
-    for (int i = 0; i < p_count; i++) {
-        std::array<double, 3> data{dist(re), dist(re), dist(re)};
-        kmeans.add_data(data);
-        // ++show_progress;
+    {
+#ifdef USE_FAR_MEMORY
+        FarLib::RootDereferenceScope scope;
+#endif
+        // std::cout << "Loading Data..." << std::endl;
+        // boost::timer::progress_display show_progress(p_count);
+        for (int i = 0; i < p_count; i++) {
+            std::array<double, 3> data{dist(re), dist(re), dist(re)};
+#ifdef USE_FAR_MEMORY
+            kmeans.add_data(data, scope);
+#else
+            kmeans.add_data(data);
+#endif
+            // ++show_progress;
+        }
     }
     kmeans.run(k, it_count);
 
@@ -367,11 +389,9 @@ void run(size_t k, size_t p_count, size_t it_count) {
 }
 
 void usage(const char *cmd_name) {
-    std::cout << "usage: " << cmd_name << " <configure file>"
-              << " <k>"
-              << " <point count>"
-              << " <iterations>"
-              << " [local size]" << std::endl;
+    std::cout << "usage: " << cmd_name << " <configure file>" << " <k>"
+              << " <point count>" << " <iterations>" << " [local size]"
+              << std::endl;
 }
 
 int main(int argc, const char *const argv[]) {
@@ -384,14 +404,14 @@ int main(int argc, const char *const argv[]) {
     }
 
 #ifdef USE_FAR_MEMORY
-    Beehive::rdma::Configure config;
+    FarLib::rdma::Configure config;
     config.from_file(argv[1]);
     if (local_size != 0) {
         config.client_buffer_size = local_size;
     }
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
 #else
-    Beehive::uthread::runtime_init();
+    FarLib::uthread::runtime_init();
 #endif
 
     int k = std::atoi(argv[2]);
@@ -404,9 +424,9 @@ int main(int argc, const char *const argv[]) {
     run(k, p_count, it_count);
 
 #ifdef USE_FAR_MEMORY
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
 #else
-    Beehive::uthread::runtime_destroy();
+    FarLib::uthread::runtime_destroy();
 #endif
     return 0;
 }

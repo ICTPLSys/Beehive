@@ -1,7 +1,7 @@
 #pragma once
 #include <cassert>
 
-namespace Beehive {
+namespace FarLib {
 namespace utils {
 
 template <typename Impl>
@@ -111,4 +111,4 @@ struct DoubleLinkedList {
 };
 
 }  // namespace utils
-}  // namespace Beehive
+}  // namespace FarLib

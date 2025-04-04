@@ -18,7 +18,7 @@
 #include "test/fixed_size_string.hpp"
 
 namespace social_network {
-using namespace Beehive;
+using namespace FarLib;
 
 // FIXME: OrderedVector
 using Timeline = OrderedVector<std::pair<int64_t, int64_t>>;

@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Beehive {
+namespace FarLib {
 
 namespace cache {
 
@@ -184,4 +184,4 @@ class DereferenceScope;
 
 }  // namespace cache
 
-}  // namespace Beehive
+}  // namespace FarLib

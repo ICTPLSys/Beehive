@@ -4,19 +4,19 @@
 
 #ifdef NO_REMOTE
 
-namespace Beehive {
+namespace FarLib {
 namespace allocator {
 #ifdef USE_BUMP_ALLOCATOR
 std::byte *heap = nullptr;
 size_t bump_pointer_offset = 0;
 #endif
 }  // namespace allocator
-}  // namespace Beehive
+}  // namespace FarLib
 
 #else
 
 #include "cache/remote_allocator.hpp"
-namespace Beehive {
+namespace FarLib {
 namespace cache {
 
 std::unique_ptr<Cache> Cache::default_instance;
@@ -119,6 +119,6 @@ thread_local RemoteThreadHeap remote_thread_heap;
 
 }  // namespace allocator
 
-}  // namespace Beehive
+}  // namespace FarLib
 
 #endif

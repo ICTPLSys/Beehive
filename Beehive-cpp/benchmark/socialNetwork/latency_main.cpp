@@ -32,7 +32,7 @@
 #include "utils/zipfian.hpp"
 
 using namespace social_network;
-using namespace Beehive;
+using namespace FarLib;
 
 // std::condition_variable queue_cond;
 
@@ -307,7 +307,7 @@ constexpr static size_t ColumnCount =
     sizeof(ColumnNames) / sizeof(*ColumnNames);
 
 ServiceResult service(Request *req, SimpleBackEndServer &backend,
-                      Beehive::DereferenceScope &scope) {
+                      FarLib::DereferenceScope &scope) {
     switch (req->get_type()) {
     case COMPOSE_POST: {
         auto *cpr = reinterpret_cast<ComposePostReq *>(req);
@@ -453,7 +453,7 @@ std::string join(const std::vector<std::string> &vec,
 
 // FIX COMPOSE POST
 void updateComposePost(SimpleBackEndServer &backend, int user_id, int num_users,
-                       Beehive::DereferenceScope &scope) {
+                       FarLib::DereferenceScope &scope) {
     // Generate text
     std::string text = generateRandomString(256);
 
@@ -544,8 +544,8 @@ bool evaluate(size_t test_count, SimpleBackEndServer &backend,
     std::vector<std::unique_ptr<ClientArgs>> client_args(num_client_threads);
     std::atomic_uint64_t req_count(0);
     auto start_ns = get_time_ns();
-    Beehive::perf_profile([&] {
-        Beehive::profile::beehive_profile([&] {
+    FarLib::perf_profile([&] {
+        FarLib::profile::beehive_profile([&] {
             for (size_t i = 0; i < num_server_threads; i++) {
                 server_args[i].reset(new ServerArgs(&server, i));
                 server_threads[i] = std::move(
@@ -696,7 +696,7 @@ int run(const char *graph_file) {
         std::cout << std::setw(ColumnWidth) << name;
     }
     std::cout << std::endl;
-    Beehive::allocator::remote::remote_global_heap.info();
+    FarLib::allocator::remote::remote_global_heap.info();
     for (auto g : GoalLatency) {
         MaxQueueTime = g.count();
         size_t loop_count = 15;
@@ -719,8 +719,8 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    Beehive::perf_init();
-    Beehive::rdma::Configure config;
+    FarLib::perf_init();
+    FarLib::rdma::Configure config;
     config.from_file(argv[1]);
     if (argc >= 4) {
         config.client_buffer_size = std::stoul(argv[3]);
@@ -729,10 +729,10 @@ int main(int argc, char **argv) {
     // ASSERT(config.max_thread_cnt % 2 == 0);
     std::cout << "config: client buffer size = " << config.client_buffer_size
               << std::endl;
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     std::cout << "running server on " << config.max_thread_cnt / 2 << " cores"
               << std::endl;
     int res = run(argv[2]);
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     return res;
 }

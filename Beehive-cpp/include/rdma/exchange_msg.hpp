@@ -9,7 +9,7 @@
 #include <cstddef>
 
 #include "utils/debug.hpp"
-namespace Beehive {
+namespace FarLib {
 
 namespace tcp {
 
@@ -33,4 +33,4 @@ inline ssize_t recieve_all(int fd, void *buf, size_t n, int flags) {
 
 }  // namespace tcp
 
-}  // namespace Beehive
+}  // namespace FarLib

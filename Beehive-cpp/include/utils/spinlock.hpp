@@ -4,7 +4,7 @@
 #include "cache/cache.hpp"
 #include "utils/uthreads.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 class Spinlock {
 public:
@@ -39,4 +39,4 @@ private:
     std::atomic_flag m_flag = ATOMIC_FLAG_INIT;
 };
 
-}  // namespace Beehive
+}  // namespace FarLib

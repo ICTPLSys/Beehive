@@ -9,14 +9,15 @@
 #include <unordered_map>
 
 #include "async/stream_runner.hpp"
-#include "rdma/client.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace async {
+#ifdef PROFILE_STREAM_RUNNER_SCHEDULE
 std::atomic_int64_t StreamRunnerProfiler::global_total_cycles;
 std::atomic_int64_t StreamRunnerProfiler::global_app_cycles;
 std::atomic_int64_t StreamRunnerProfiler::global_sched_cycles;
 std::atomic_int64_t StreamRunnerProfiler::global_poll_cq_cycles;
+#endif
 }  // namespace async
 namespace profile {
 
@@ -53,12 +54,7 @@ void ThreadLocalProfileData::unregister_thread() {
     global_profile_data.check_cq_count += check_cq_count;
     global_profile_data.mark_count += mark_count;
     global_profile_data.not_mark_count += not_mark_count;
-    global_profile_data.access_count += access_count;
-    global_profile_data.fetch_count += fetch_count;
-    global_profile_data.on_miss_enter_count += on_miss_enter_count;
-    global_profile_data.prefetch_count += prefetch_count;
     global_profile_data.on_miss_cycles += on_miss_cycles;
-    global_profile_data.deref_count += deref_count;
     profile_data_map.erase(std::this_thread::get_id());
 }
 
@@ -94,23 +90,12 @@ DEFINE_COLLECT(check_cq_cycles);
 DEFINE_COLLECT(check_cq_count);
 DEFINE_COLLECT(mark_count);
 DEFINE_COLLECT(not_mark_count);
-DEFINE_COLLECT(poll_count);
-DEFINE_COLLECT(post_fetch_retry_count);
-DEFINE_COLLECT(check_cq_success_count);
-DEFINE_COLLECT(check_cq_failed_count);
-DEFINE_COLLECT(access_count);
-DEFINE_COLLECT(fetch_count);
-DEFINE_COLLECT(on_miss_enter_count);
-DEFINE_COLLECT(present_count);
-DEFINE_COLLECT(enqueue_count);
-DEFINE_COLLECT(prefetch_count);
 DEFINE_COLLECT(on_miss_cycles);
 DEFINE_COLLECT(prefetch_cycles);
-DEFINE_COLLECT(deref_count);
 
 void print_profile_data() {
     constexpr bool PrintEnabled =
-        Enabled || enabled::Evacuation || enabled::OnMissSchedule;
+        Enabled || enabled::Evacuation || enabled::YieldCount;
     if constexpr (!(PrintEnabled)) return;
 #define PRINT_IF(NAME, VALUE, ENABLED)                               \
     if constexpr (ENABLED) {                                         \
@@ -124,11 +109,10 @@ void print_profile_data() {
     PRINT_IF("work cycles", collect_work_cycles(), Enabled);
     PRINT_IF("alloc cycles", collect_allocate_cycles(), Enabled);
     PRINT_IF("post cycles", collect_post_fetch_cycles(), Enabled);
-    PRINT_IF("poll count", collect_poll_count(), Enabled);
     PRINT_IF("poll cycles", collect_poll_cycles(), Enabled);
     PRINT_IF("yield cycles", collect_yield_cycles(), Enabled);
     PRINT_IF("miss count", collect_data_miss_count(), Enabled);
-    PRINT_IF("yield count", collect_yield_count(), Enabled);
+    PRINT_IF("yield count", collect_yield_count(), enabled::YieldCount);
     PRINT_IF("mark cycles", collect_mark_cycles(), enabled::Evacuation);
     PRINT_IF("evict cycles", collect_evict_cycles(), enabled::Evacuation);
     PRINT_IF("evacuate count", collect_evacuation_count(), enabled::Evacuation);
@@ -137,30 +121,10 @@ void print_profile_data() {
     PRINT_IF("check cq count", collect_check_cq_count(), Enabled);
     PRINT_IF("mark count", collect_mark_count(), Enabled);
     PRINT_IF("not mark count", collect_not_mark_count(), Enabled);
-    PRINT_IF("post fetch retry count", collect_post_fetch_retry_count(),
-             Enabled);
-    PRINT_IF("check cq success count", collect_check_cq_success_count(),
-             Enabled);
-    PRINT_IF("check cq failed count", collect_check_cq_failed_count(), Enabled);
-    PRINT_IF("access count", collect_access_count(), Enabled);
-    PRINT_IF("fetch count", collect_fetch_count(), Enabled);
-    PRINT_IF("on miss enter count", collect_on_miss_enter_count(), Enabled);
-    PRINT_IF("present count", collect_present_count(), Enabled);
-    PRINT_IF("enqueue count", collect_enqueue_count(), Enabled);
-    PRINT_IF("prefetch count", collect_prefetch_count(), Enabled);
     PRINT_IF("on miss cycles", collect_on_miss_cycles(),
              enabled::OnMissSchedule);
     PRINT_IF("prefetch cycles", collect_prefetch_cycles(),
              enabled::OnMissSchedule);
-    PRINT_IF("read bandwidth",
-             (static_cast<double>(global_profile_data.rbytes) / 1e9) /
-                 (global_cycles / 2.8 / 1e9),
-             Enabled);
-    PRINT_IF("write bandwidth",
-             (static_cast<double>(global_profile_data.wbytes) / 1e9) /
-                 (global_cycles / 2.8 / 1e9),
-             Enabled);
-    PRINT_IF("deref count", collect_deref_count(), Enabled);
 #undef PRINT_IF
 }
 
@@ -229,21 +193,16 @@ void print_mem_usage_trace() {
     }
 }
 
-void start_record_bandwidth() {
-    global_profile_data.rbytes =
-        rdma::ClientControl::get_default()->get_all_read_bytes();
-    global_profile_data.wbytes =
-        rdma::ClientControl::get_default()->get_all_write_bytes();
-}
-void end_record_bandwidth() {
-    global_profile_data.rbytes =
-        rdma::ClientControl::get_default()->get_all_read_bytes() -
-        global_profile_data.rbytes;
-    global_profile_data.wbytes =
-        rdma::ClientControl::get_default()->get_all_write_bytes() -
-        global_profile_data.wbytes;
-}
-
 }  // namespace profile
 
-}  // namespace Beehive
+namespace async {
+#ifdef PROFILE_STREAM_RUNNER_SCHEDULE
+std::atomic_int64_t StreamRunnerProfiler::global_total_cycles = 0;
+std::atomic_int64_t StreamRunnerProfiler::global_app_cycles = 0;
+std::atomic_int64_t StreamRunnerProfiler::global_sched_cycles = 0;
+std::atomic_int64_t StreamRunnerProfiler::global_poll_cq_cycles = 0;
+StreamRunnerProfiler::Warn StreamRunnerProfiler::warn;
+#endif
+}  // namespace async
+
+}  // namespace FarLib

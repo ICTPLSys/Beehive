@@ -5,7 +5,7 @@
 #include "cache/cache.hpp"
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace async {
 
 /*
@@ -54,4 +54,4 @@ public:
 };
 
 }  // namespace async
-}  // namespace Beehive
+}  // namespace FarLib

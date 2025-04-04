@@ -15,9 +15,9 @@
 #include "utils/debug.hpp"
 
 static constexpr size_t cmax(size_t n1, size_t n2) { return n1 > n2 ? n1 : n2; }
-using namespace Beehive;
-using namespace Beehive::cache;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::cache;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 using Map = ConcurrentHashMap<int32_t, int32_t>;
 using StdMap = std::unordered_map<int32_t, int32_t>;
@@ -25,7 +25,7 @@ using StdMap = std::unordered_map<int32_t, int32_t>;
 template <bool Mut>
 struct GetCont {
     int32_t* result;
-    GetCont(int32_t* r) : result(r) {}
+    GetCont(int32_t *r) : result(r) {}
     void operator()(LiteAccessor<int32_t, Mut> p) {
         if (p.is_null())
             *result = 0;
@@ -36,7 +36,7 @@ struct GetCont {
 
 struct BoolCont {
     bool* result;
-    BoolCont(bool* r) : result(r) {}
+    BoolCont(bool *r) : result(r) {}
     void operator()(bool v) { *result = v; }
 };
 
@@ -239,10 +239,10 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test<true>();   // ordered
     test<false>();  // non ordered
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

@@ -11,3 +11,6 @@ target_link_libraries(cc libgraph ${COMMON_LIBS} papi)
 
 add_executable(bc bc.cpp)
 target_link_libraries(bc libgraph ${COMMON_LIBS} papi)
+
+add_executable(bfscc bfscc.cpp)
+target_link_libraries(bfscc libgraph ${COMMON_LIBS} papi)

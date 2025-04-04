@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <thread>
@@ -9,9 +8,9 @@
 #include "utils/control.hpp"
 #include "utils/uthreads.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
-using namespace Beehive::uthread;
+using namespace FarLib;
+using namespace FarLib::rdma;
+using namespace FarLib::uthread;
 using namespace std::chrono_literals;
 
 constexpr size_t BUFFER_SIZE = 16 * 1024 * 1024;
@@ -45,7 +44,8 @@ void post_writes(size_t idx_begin, size_t idx_end) {
         void *p = (char *)buffer + offset;
         *(uint64_t *)p = (uint64_t)p;
         while (
-            !client->post_write(offset, p, sizeof(uint64_t), (uint64_t)p, idx));
+            !client->post_write(offset, p, sizeof(uint64_t), (uint64_t)p, idx))
+            ;
     }
 }
 
@@ -57,7 +57,8 @@ void post_reads(size_t idx_begin, size_t idx_end) {
         void *p = (char *)buffer + offset;
         *(uint64_t *)p = 0;
         while (
-            !client->post_read(offset, p, sizeof(uint64_t), (uint64_t)p, idx));
+            !client->post_read(offset, p, sizeof(uint64_t), (uint64_t)p, idx))
+            ;
     }
 }
 
@@ -170,9 +171,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);  // wait for server start, FIXME
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

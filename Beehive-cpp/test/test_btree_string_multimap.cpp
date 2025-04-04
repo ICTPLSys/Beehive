@@ -8,8 +8,8 @@
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 Configure config;
@@ -112,7 +112,7 @@ void test() {
     test_leaf();
     test_btree();
     test_btree(
-        "/mnt/ssd/liquanxi/data/word_count/training-monolingual/"
+        "/path/to/data/word_count/training-monolingual/"
         "news.2009.es.shuffled");
 }
 
@@ -125,9 +125,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

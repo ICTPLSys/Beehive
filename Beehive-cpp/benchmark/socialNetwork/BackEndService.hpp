@@ -20,55 +20,54 @@ public:
                      std::string_view text,
                      const LocalVector<int64_t> &media_ids,
                      const LocalVector<std::string> &media_types,
-                     const PostType post_type, Beehive::DereferenceScope &scope,
+                     const PostType post_type, FarLib::DereferenceScope &scope,
                      ComposePostReq *req);
     void ComposePost(std::string_view username, int64_t user_id,
                      std::string_view text,
                      const LocalVector<int64_t> &media_ids,
                      const LocalVector<std::string> &media_types,
-                     const PostType post_type,
-                     Beehive::DereferenceScope &scope);
+                     const PostType post_type, FarLib::DereferenceScope &scope);
     LocalVector<Post> ReadUserTimeline(int64_t user_id, int start, int stop,
-                                       Beehive::DereferenceScope &scope,
+                                       FarLib::DereferenceScope &scope,
                                        ReadUserTimelineReq *req);
     LocalVector<Post> ReadUserTimeline(int64_t user_id, int start, int stop,
-                                       Beehive::DereferenceScope &scope);
+                                       FarLib::DereferenceScope &scope);
     std::variant<LoginErrorCode, std::string> Login(
         std::string_view username, std::string_view password,
-        Beehive::DereferenceScope &scope);
+        FarLib::DereferenceScope &scope);
     void RegisterUser(std::string_view first_name, std::string_view last_name,
                       std::string_view username, std::string_view password,
-                      Beehive::DereferenceScope &scope);
+                      FarLib::DereferenceScope &scope);
     void RegisterUserWithId(std::string_view first_name,
                             std::string_view last_name,
                             std::string_view username,
                             std::string_view password, const int64_t user_id,
-                            Beehive::DereferenceScope &scope);
+                            FarLib::DereferenceScope &scope);
     LocalVector<int64_t> GetFollowers(int64_t user_id,
-                                      Beehive::DereferenceScope &scope);
+                                      FarLib::DereferenceScope &scope);
     void Unfollow(int64_t user_id, int64_t followee_id,
-                  Beehive::DereferenceScope &scope);
+                  FarLib::DereferenceScope &scope);
     void UnfollowWithUsername(std::string_view user_name,
                               std::string_view followee_name,
-                              Beehive::DereferenceScope &scope);
+                              FarLib::DereferenceScope &scope);
     void Follow(int64_t user_id, int64_t followee_id,
-                Beehive::DereferenceScope &scope, FollowReq *req);
+                FarLib::DereferenceScope &scope, FollowReq *req);
     void FollowWithUsername(std::string_view user_name,
                             std::string_view followee_name,
-                            Beehive::DereferenceScope &scope);
+                            FarLib::DereferenceScope &scope);
     LocalVector<int64_t> GetFollowees(int64_t user_id,
-                                      Beehive::DereferenceScope &scope);
+                                      FarLib::DereferenceScope &scope);
     LocalVector<Post> ReadHomeTimeline(int64_t user_id, int start, int stop,
-                                       Beehive::DereferenceScope &scope,
+                                       FarLib::DereferenceScope &scope,
                                        ReadHomeTimelineReq *req);
     void UploadMedia(std::string_view filename, std::string_view data,
-                     Beehive::DereferenceScope &scope);
+                     FarLib::DereferenceScope &scope);
     FixedSizeString<DataLen> GetMedia(std::string_view filename,
-                                      Beehive::DereferenceScope &scope);
+                                      FarLib::DereferenceScope &scope);
     void RemovePosts(int64_t user_id, int start, int stop,
-                     Beehive::DereferenceScope &scope);
+                     FarLib::DereferenceScope &scope);
     std::optional<int64_t> GetUserId(std::string_view username,
-                                     Beehive::DereferenceScope &scope);
+                                     FarLib::DereferenceScope &scope);
     // void computeHometimelineSize();
     // void computeUsertimelineSize();
     // void computeFollowerSize();
@@ -88,9 +87,9 @@ public:
 
     struct ReadUserTimelineCont {
         ReadUserTimelineReq *request;
-        Beehive::async::GenericStreamRunner<512> *runner;
+        FarLib::async::GenericStreamRunner<512> *runner;
         ReadUserTimelineCont(ReadUserTimelineReq *req,
-                             Beehive::DereferenceScope &scope)
+                             FarLib::DereferenceScope &scope)
             : request(req) {}
         ReadUserTimelineCont(ReadUserTimelineCont &&) = default;
         void operator()(std::vector<std::pair<int64_t, int64_t>> &&result,
@@ -122,7 +121,7 @@ public:
 
     struct ReadHomeTimelineCont {
         ReadHomeTimelineReq *request;
-        Beehive::async::GenericStreamRunner<512> *runner;
+        FarLib::async::GenericStreamRunner<512> *runner;
         ReadHomeTimelineCont(ReadHomeTimelineReq *req) : request(req) {}
         void operator()(std::vector<std::pair<int64_t, int64_t>> &&result,
                         const DereferenceScope &scope) {
@@ -189,7 +188,7 @@ public:
 
     struct FollowCont {
         FollowReq *req;
-        Beehive::async::GenericStreamRunner<512> *runner;
+        FarLib::async::GenericStreamRunner<512> *runner;
         FollowCont(FollowReq *req) : req(req) {}
         FollowCont(FollowCont &&) = default;
         void operator()(bool result, DereferenceScope &scope) {
@@ -214,19 +213,19 @@ public:
 
 private:
     TextServiceReturn ComposeText(std::string_view text,
-                                  Beehive::DereferenceScope &scope);
+                                  FarLib::DereferenceScope &scope);
     LocalVector<UserMention> ComposeUserMentions(
         const LocalVector<std::string> &usernames,
-        Beehive::DereferenceScope &scope);
+        FarLib::DereferenceScope &scope);
     LocalVector<Url> ComposeUrls(const LocalVector<std::string> &urls,
-                                 Beehive::DereferenceScope &scope);
+                                 FarLib::DereferenceScope &scope);
     void WriteUserTimeline(int64_t post_id, int64_t user_id, int64_t timestamp,
-                           Beehive::DereferenceScope &scope);
+                           FarLib::DereferenceScope &scope);
     void WriteHomeTimeline(int64_t post_id, int64_t user_id, int64_t timestamp,
                            const LocalVector<int64_t> &user_mentions_id,
-                           Beehive::DereferenceScope &scope);
+                           FarLib::DereferenceScope &scope);
     LocalVector<Post> ReadPosts(const LocalVector<int64_t> &post_ids,
-                                Beehive::DereferenceScope &scope);
+                                FarLib::DereferenceScope &scope);
     States &states_;
 };
 }  // namespace social_network

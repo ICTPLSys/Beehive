@@ -1,11 +1,11 @@
 #pragma once
 
-#include <atomic>
 #include <utility>
 
+#include "cache/accessor.hpp"
 #include "cache/cache.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 template <typename Key, typename Object, typename Hash = std::hash<Key>,
           size_t NeighborhoodSize = 32>
@@ -21,10 +21,6 @@ public:
         far_obj_t object;
 
         Bucket() : bitmap(0) {}
-
-        ConstAccessor<Object> get(__DMH__) {
-            return ConstAccessor<Object>(object, __on_miss__);
-        }
 
         template <bool Mut = false>
         LiteAccessor<Object, Mut> get(__DMH__, DereferenceScope &scope) {
@@ -43,21 +39,6 @@ private:
         return Hash{}(key)&hash_mask;
     }
 
-    ConstAccessor<Object> get_internal(const Key &key, Bucket *neighborhood,
-                                       __DMH__) {
-        uint32_t bitmap = neighborhood->bitmap;
-        while (bitmap) {
-            int offset = __builtin_ctz(bitmap);
-            Bucket &bucket = neighborhood[offset];
-            ConstAccessor<Object> accessor = bucket.get(__on_miss__);
-            if (accessor->equals(key)) {
-                return accessor;
-            }
-            bitmap ^= (1 << offset);
-        }
-        return {};
-    }
-
     LiteAccessor<Object> get_internal(const Key &key, Bucket *neighborhood,
                                       __DMH__, DereferenceScope &scope) {
         uint32_t bitmap = neighborhood->bitmap;
@@ -73,35 +54,11 @@ private:
         return {};
     }
 
-    ConstAccessor<Object> get_const(const Key &key, __DMH__) {
-        size_t bucket_idx = get_bucket_idx(key);
-        Bucket *neighborhood = buckets.data() + bucket_idx;
-        return get_internal(key, neighborhood, __on_miss__);
-    }
-
     LiteAccessor<Object> get_const(const Key &key, __DMH__,
                                    DereferenceScope &scope) {
         size_t bucket_idx = get_bucket_idx(key);
         Bucket *neighborhood = buckets.data() + bucket_idx;
         return get_internal(key, neighborhood, __on_miss__, scope);
-    }
-
-    ConstAccessor<Object> remove_impl(const Key &key, __DMH__) {
-        size_t bucket_idx = get_bucket_idx(key);
-        Bucket *neighborhood = buckets.data() + bucket_idx;
-        uint32_t bitmap = neighborhood->bitmap;
-        while (bitmap) {
-            int offset = __builtin_ctz(bitmap);
-            Bucket &bucket = neighborhood[offset];
-            ConstAccessor<Object> accessor = bucket.get(__on_miss__);
-            if (accessor->equals(key)) {
-                neighborhood->bitmap ^= (1 << offset);
-                bucket.object = far_obj_t::null();
-                return accessor;
-            }
-            bitmap ^= (1 << offset);
-        }
-        return {};
     }
 
     // insert an object into bucket
@@ -141,23 +98,6 @@ private:
         TODO("can not find empty bucket");
     }
 
-    std::pair<Accessor<Object>, bool> put_impl(const Key &key,
-                                               size_t object_size, __DMH__) {
-        size_t bucket_idx = get_bucket_idx(key);
-        Bucket *neighborhood = buckets.data() + bucket_idx;
-        ConstAccessor<Object> accessor =
-            get_internal(key, neighborhood, __on_miss__);
-        if (!accessor.is_null()) {
-            return {accessor.as_mut(), false};
-        }
-        // can not find the object, insert into a new bucket
-        auto raw_object = Accessor<void>::allocate(object_size);
-        Accessor<Object> object(std::move(raw_object),
-                                static_cast<Object *>(raw_object.as_ptr()));
-        insert_impl(bucket_idx, object.get_obj());
-        return {std::move(object), true};
-    }
-
     std::pair<LiteAccessor<Object, true>, bool> put_impl(
         const Key &key, size_t object_size, __DMH__, DereferenceScope &scope) {
         size_t bucket_idx = get_bucket_idx(key);
@@ -176,6 +116,25 @@ private:
         return {std::move(object), true};
     }
 
+    LiteAccessor<Object> remove_impl(const Key &key, __DMH__,
+                                     DereferenceScope &scope) {
+        size_t bucket_idx = get_bucket_idx(key);
+        Bucket *neighborhood = buckets.data() + bucket_idx;
+        uint32_t bitmap = neighborhood->bitmap;
+        while (bitmap) {
+            int offset = __builtin_ctz(bitmap);
+            Bucket &bucket = neighborhood[offset];
+            LiteAccessor<Object> accessor = bucket.get(__on_miss__, scope);
+            if (accessor->equals(key)) {
+                neighborhood->bitmap ^= (1 << offset);
+                bucket.object = far_obj_t::null();
+                return accessor;
+            }
+            bitmap ^= (1 << offset);
+        }
+        return {};
+    }
+
 public:
     Hopscotch(size_t capacity_shift) {
         size_t capacity = 1 << capacity_shift;
@@ -189,14 +148,6 @@ public:
                 Cache::get_default()->deallocate(bucket.object);
             }
         }
-    }
-
-    Accessor<Object> get_mut(const Key &key, __DMH__) {
-        return get_const(key, __on_miss__).as_mut();
-    }
-
-    ConstAccessor<Object> get(const Key &key, __DMH__) {
-        return get_const(key, __on_miss__);
     }
 
     LiteAccessor<Object, true> get_mut(const Key &key, __DMH__,
@@ -260,23 +211,17 @@ public:
 
     // if key not exists: insert a new object and return (accessor, true)
     // if key exists: return (accessor, false)
-    std::pair<Accessor<Object>, bool> put(const Key &key, size_t object_size,
-                                          __DMH__) {
-        return put_impl(key, object_size, __on_miss__);
-    }
-
-    // if key not exists: insert a new object and return (accessor, true)
-    // if key exists: return (accessor, false)
     std::pair<LiteAccessor<Object, true>, bool> put(const Key &key,
                                                     size_t object_size, __DMH__,
                                                     DereferenceScope &scope) {
         return put_impl(key, object_size, __on_miss__, scope);
     }
 
-    // if found, remove it and return the accessor of the object
-    // user can deallocate this object
-    ConstAccessor<Object> remove(const Key &key, __DMH__) {
-        return remove_impl(key, __on_miss__);
+    bool remove(const Key &key, __DMH__, DereferenceScope &scope) {
+        auto acc = remove_impl(key, __on_miss__, scope);
+        if (acc.is_null()) return false;
+        Cache::get_default()->deallocate(acc.get_obj());
+        return true;
     }
 
 private:
@@ -284,4 +229,4 @@ private:
     size_t hash_mask;
 };
 
-}  // namespace Beehive
+}  // namespace FarLib

@@ -13,8 +13,8 @@
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 #define TEST_SYNC
@@ -42,7 +42,7 @@ std::vector<MyData> build_test_data(size_t size = TEST_SIZE) {
 }
 
 template <typename T>
-void check(std::vector<T>& local, Beehive::Vector<T>& remote) {
+void check(std::vector<T>& local, FarLib::Vector<T>& remote) {
     ASSERT(local.size() == remote.size());
     for (int i = 0; i < TEST_SIZE; i++) {
         T& local_data = local[i];
@@ -64,7 +64,7 @@ void test() {
 #ifdef TEST_SYNC
     {
         auto local_vector = build_test_data();
-        Beehive::Vector<MyData> remote_vector;
+        FarLib::Vector<MyData> remote_vector;
         for (auto data : local_vector) {
             remote_vector.push_back(data);
         }
@@ -89,7 +89,7 @@ void test() {
 #ifdef TEST_COND_SYNC
     {
         auto local_vector = build_test_data();
-        Beehive::Vector<MyData> remote_vector;
+        FarLib::Vector<MyData> remote_vector;
         for (auto data : local_vector) {
             remote_vector.push_back(data);
         }
@@ -124,9 +124,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

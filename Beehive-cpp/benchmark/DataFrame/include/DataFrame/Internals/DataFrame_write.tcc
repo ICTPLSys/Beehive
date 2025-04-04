@@ -37,7 +37,7 @@ namespace hmdf
 template<typename I, typename H>
 template<typename S, typename ...Ts>
 bool DataFrame<I, H>::
-write_with_values_only (S &o, bool values_only, io_format iof) const  {
+write_with_values_only (S &o, bool values_only, io_format iof, DereferenceScope &scope) const  {
 
     if (iof != io_format::csv && iof != io_format::json)
         throw NotImplemented("write(): This io_format is not implemented");
@@ -99,10 +99,10 @@ write_with_values_only (S &o, bool values_only, io_format iof) const  {
         if (iof == io_format::json)  {
             o << "\"D\":[";
             if (! indices_.empty())  {
-                _write_json_df_index_(o, *indices_[0]);
+                _write_json_df_index_(o, *indices_.get_const_lite_iter(0, scope));
                 for (size_type i = 1; i < indices_.size(); ++i)  {
                     o << ',';
-                    _write_json_df_index_(o, *indices_[i]);
+                    _write_json_df_index_(o, *indices_.get_const_lite_iter(i, scope));
                 }
             }
             o << "]}";
@@ -110,7 +110,7 @@ write_with_values_only (S &o, bool values_only, io_format iof) const  {
         }
         else  {
             for (size_type i = 0; i < indices_.size(); ++i)
-                _write_csv_df_index_(o, *indices_[i]) << ',';
+                _write_csv_df_index_(o, *indices_.get_const_lite_iter(i, scope)) << ',';
             o << '\n';
         }
     }
@@ -120,7 +120,7 @@ write_with_values_only (S &o, bool values_only, io_format iof) const  {
             print_json_functor_<Ts ...> functor (iter.first.c_str(),
                                                 //  values_only,
                                                  need_pre_comma,
-                                                 o);
+                                                 o, scope);
 
             data_[iter.second].change(functor);
             need_pre_comma = true;
@@ -130,7 +130,7 @@ write_with_values_only (S &o, bool values_only, io_format iof) const  {
         for (const auto &iter : column_tb_)  {
             print_csv_functor_<Ts ...>  functor (iter.first.c_str(),
                                                 //  values_only,
-                                                 o);
+                                                 o, scope);
 
             data_[iter.second].change(functor);
         }

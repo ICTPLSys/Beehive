@@ -11,7 +11,7 @@
 #include "utils/debug.hpp"
 #include "utils/linked_list.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace async {
 
 template <size_t ContextSize = 256, bool Ordered = false, bool UseTimer = false,
@@ -315,4 +315,4 @@ public:
 
 }  // namespace async
 
-}  // namespace Beehive
+}  // namespace FarLib

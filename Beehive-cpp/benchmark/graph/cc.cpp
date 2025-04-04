@@ -1,10 +1,11 @@
+
 #include "graph.hpp"
 #include "utils/control.hpp"
 
 // returns a checksum
 template <bool Optimize>
-void connected_components(Graph &graph, const Options &options) {
-    constexpr size_t MaxThreadCount = 1;
+void connected_components(Graph<> &graph, const Options &options) {
+    constexpr size_t MaxThreadCount = 128;
     size_t vertex_count = graph.vertex_count();
     std::vector<std::atomic<vertex_t>> id(vertex_count);
     std::vector<vertex_t> previous_id(vertex_count);
@@ -41,13 +42,10 @@ void connected_components(Graph &graph, const Options &options) {
         }
     };
 
-    std::vector<uint8_t> exists(vertex_count);
-    uthread::parallel_for<1024>(MaxThreadCount, vertex_count,
-                                [&exists](size_t i) { exists[i] = 1; });
-    VertexSet frontier(std::move(exists));
+    VertexSet frontier(vertex_count, all_exists{}, MaxThreadCount);
     for (size_t i = 0; i < options.max_iteration && !frontier.empty(); i++) {
-        vertex_map<MaxThreadCount>(frontier,
-                                   [&](vertex_t v) { previous_id[v] = id[v]; });
+        graph.vertex_map_cycles += vertex_map<MaxThreadCount>(
+            frontier, [&](vertex_t v) { previous_id[v] = id[v]; });
         frontier = edge_map<Optimize, MaxThreadCount>(graph, frontier,
                                                       CC(id, previous_id));
     }
@@ -56,10 +54,13 @@ void connected_components(Graph &graph, const Options &options) {
 int main(int argc, const char *const argv[]) {
     Options options;
     read_options(argc, argv, options);
-    Beehive::rdma::Configure config;
+    FarLib::rdma::Configure config;
     config.from_file(options.config_file_name.c_str());
-    Beehive::runtime_init(config);
-    evaluate(connected_components<true>, connected_components<false>, options);
-    Beehive::runtime_destroy();
+    if (options.local_memory.has_value()) {
+        config.client_buffer_size = options.local_memory.value();
+    }
+    FarLib::runtime_init(config);
+    evaluate<false>(connected_components<true>, options);
+    FarLib::runtime_destroy();
     return 0;
 }

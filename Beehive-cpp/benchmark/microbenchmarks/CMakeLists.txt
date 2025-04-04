@@ -9,3 +9,12 @@ target_link_libraries(copy_selected ${COMMON_LIBS})
 
 add_executable(traverse_array traverse_array.cpp)
 target_link_libraries(traverse_array ${COMMON_LIBS})
+
+add_executable(bw bw.cpp)
+target_link_libraries(bw ${COMMON_LIBS})
+
+add_executable(rdma_bw rdma_bw.cpp)
+target_link_libraries(rdma_bw ${COMMON_LIBS})
+
+add_executable(pointer_chasing pointer_chasing.cpp)
+target_link_libraries(pointer_chasing ${COMMON_LIBS})

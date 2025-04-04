@@ -100,7 +100,7 @@ Request *gen_random_req(SocialNetworkThreadState *state) {
 }
 
 ServiceResult service(Request *req, SimpleBackEndServer &backend,
-                      Beehive::DereferenceScope &scope) {
+                      FarLib::DereferenceScope &scope) {
     switch (req->get_type()) {
     case compose_post: {
         auto *cpr = dynamic_cast<ComposePostReq *>(req);
@@ -252,7 +252,7 @@ std::string join(const std::vector<std::string> &vec,
 
 // FIX COMPOSE POST
 void updateComposePost(SimpleBackEndServer &backend, int user_id, int num_users,
-                       Beehive::DereferenceScope &scope) {
+                       FarLib::DereferenceScope &scope) {
     // Generate text
     std::string text = generateRandomString(256);
 
@@ -361,7 +361,7 @@ void consumer_uthread_function(SimpleBackEndServer *backend) {
     // FIXME: use global hdr records
     hdr_init(1, 100'000'000, 3, &hist_in_queue);
     hdr_init(1, 100'000'000, 3, &hist_serve);
-    Beehive::RootDereferenceScope scope;
+    FarLib::RootDereferenceScope scope;
     while (true) {
         if (request_queue.empty() && active_producers.load() == 0) {
             break;
@@ -426,7 +426,7 @@ int run(const char *graph_file) {
     // std::cout << num_users << std::endl;
 
     {
-        Beehive::RootDereferenceScope scope;
+        FarLib::RootDereferenceScope scope;
         /* prepare data */
         std::cout << "register user" << std::endl;
         // Register users
@@ -471,30 +471,30 @@ int run(const char *graph_file) {
 
     // Create multiple producer threads
     const int num_producers = kNumThreads;  // For example, 3 producers
-    std::vector<std::unique_ptr<Beehive::uthread::UThread>> producer_threads(
+    std::vector<std::unique_ptr<FarLib::uthread::UThread>> producer_threads(
         num_producers);
     for (int i = 0; i < num_producers; ++i) {
         std::pair<int, std::chrono::seconds> args = {i + 1,
                                                      std::chrono::seconds(1)};
         producer_threads[i] =
-            Beehive::uthread::create(producer_thread_function, &args);
+            FarLib::uthread::create(producer_thread_function, &args);
     }
 
-    std::unique_ptr<Beehive::uthread::UThread> uthread_consumer;
+    std::unique_ptr<FarLib::uthread::UThread> uthread_consumer;
     // FIXME: multi consumers
     uthread_consumer =
-        Beehive::uthread::create(consumer_uthread_function, &backend);
+        FarLib::uthread::create(consumer_uthread_function, &backend);
 
     // Join producer threads (after they finish producing)
     for (auto &thread : producer_threads) {
         std::cout << "join producer thread" << std::endl;
-        Beehive::uthread::join(std::move(thread));
+        FarLib::uthread::join(std::move(thread));
         std::cout << "join producer thread success" << std::endl;
     }
 
     // Join the single consumer thread
     std::cout << "join consumer thread" << std::endl;
-    Beehive::uthread::join(std::move(uthread_consumer));
+    FarLib::uthread::join(std::move(uthread_consumer));
     std::cout << "join consumer thread success" << std::endl;
 
     // backend.computeHometimelineSize();
@@ -512,17 +512,17 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    Beehive::perf_init();
-    Beehive::rdma::Configure config;
+    FarLib::perf_init();
+    FarLib::rdma::Configure config;
     config.from_file(argv[1]);
     ASSERT(config.max_thread_cnt >= 2);
     ASSERT(config.max_thread_cnt % 2 == 0);
     std::cout << "config: client buffer size = " << config.client_buffer_size
               << std::endl;
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     std::cout << "running server on " << config.max_thread_cnt / 2 << " cores"
               << std::endl;
     int res = run(argv[2]);
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     return res;
 }

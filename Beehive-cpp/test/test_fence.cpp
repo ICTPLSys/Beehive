@@ -5,15 +5,15 @@
 #include <vector>
 
 #include "async/scoped_inline_task.hpp"
+#include "cache/accessor.hpp"
 #include "cache/cache.hpp"
 #include "data_structure/vector.hpp"
-#include "rdma/client.hpp"
 #include "rdma/server.hpp"
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 constexpr size_t GroupSize = 1024 / sizeof(int);
@@ -47,9 +47,12 @@ struct Ctx {
 void test_fence() {
     std::vector<int> local_vec;
     DenseVector<int, GroupSize> vec;
-    for (size_t i = 0; i < VecSize; i++) {
-        local_vec.push_back(i);
-        vec.emplace_back(i);
+    {
+        RootDereferenceScope scope;
+        for (size_t i = 0; i < VecSize; i++) {
+            local_vec.push_back(i);
+            vec.emplace_back(scope, i);
+        }
     }
     ASSERT(vec.size() == VecSize);
 

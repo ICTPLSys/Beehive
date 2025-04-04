@@ -1,16 +1,14 @@
-#include <chrono>
 #include <thread>
-#include <vector>
 
+#include "cache/accessor.hpp"
 #include "cache/cache.hpp"
 #include "data_structure/vector.hpp"
-#include "rdma/client.hpp"
 #include "rdma/server.hpp"
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 #include "utils/parallel.hpp"
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 void run() {
@@ -18,8 +16,11 @@ void run() {
     constexpr size_t VecSize = 1024 * GroupSize - 3;
     DenseVector<int, GroupSize> vec;
     // allocation
-    for (size_t i = 0; i < VecSize; i++) {
-        vec.emplace_back(i);
+    {
+        RootDereferenceScope scope;
+        for (size_t i = 0; i < VecSize; i++) {
+            vec.emplace_back(scope, i);
+        }
     }
     ASSERT(vec.size() == VecSize);
     constexpr int expected_sum =
@@ -66,9 +67,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     run();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

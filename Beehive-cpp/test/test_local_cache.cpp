@@ -1,16 +1,15 @@
-#include <chrono>
 #include <thread>
 #include <vector>
 
+#include "cache/accessor.hpp"
 #include "cache/cache.hpp"
-#include "rdma/client.hpp"
 #include "rdma/server.hpp"
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 
-using namespace Beehive;
-using namespace Beehive::cache;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::cache;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 Configure config;
@@ -18,9 +17,10 @@ Configure config;
 void test() {
     auto &local_cache = *Cache::get_default();
     std::vector<far_obj_t> objs;
+    RootDereferenceScope scope;
     // allocation
     for (size_t i = 0; i < 1024 * 128; i++) {
-        auto [obj, ptr] = local_cache.allocate(1024, true);
+        auto [obj, ptr] = local_cache.allocate(1024, true, scope);
         *static_cast<size_t *>(ptr) = i;
         local_cache.release_cache(obj, true);
         objs.push_back(obj);
@@ -28,7 +28,7 @@ void test() {
     // sync_fetch & write back
     for (size_t i = 0; i < objs.size(); i++) {
         auto obj = objs[i];
-        void *ptr = local_cache.sync_fetch(obj);
+        void *ptr = local_cache.sync_fetch(obj, scope);
         size_t v = *static_cast<size_t *>(ptr);
         ASSERT(v == i);
         *static_cast<size_t *>(ptr) = i * i;
@@ -36,23 +36,25 @@ void test() {
     }
     for (size_t i = 0; i < objs.size(); i++) {
         auto obj = objs[i];
-        void *ptr = local_cache.sync_fetch(obj);
+        void *ptr = local_cache.sync_fetch(obj, scope);
         size_t v = *static_cast<size_t *>(ptr);
         ASSERT(v == i * i);
         local_cache.release_cache(obj, false);
     }
     // accessor
-    size_t sum = 0;
-    for (size_t i = 0; i < objs.size(); i++) {
-        auto obj = objs[i];
-        cache::Accessor<size_t> accessor(obj);
-        sum += *accessor;
+    {
+        size_t sum = 0;
+        for (size_t i = 0; i < objs.size(); i++) {
+            auto obj = objs[i];
+            cache::LiteAccessor<size_t> accessor(obj, scope);
+            sum += *accessor;
+        }
+        size_t expected_sum = 0;
+        for (size_t i = 0; i < 1024 * 128; i++) {
+            expected_sum += i * i;
+        }
+        ASSERT(sum == expected_sum);
     }
-    size_t expected_sum = 0;
-    for (size_t i = 0; i < 1024 * 128; i++) {
-        expected_sum += i * i;
-    }
-    ASSERT(sum == expected_sum);
     // cache miss handler
     {
         size_t sum = 0;
@@ -62,7 +64,8 @@ void test() {
         ON_MISS_END
         for (size_t i = 0; i < objs.size(); i++) {
             auto obj = objs[i];
-            auto accessor = cache::Accessor<size_t>(obj, __on_miss__);
+            auto accessor =
+                cache::LiteAccessor<size_t>(obj, __on_miss__, scope);
             sum += *accessor;
         }
         size_t expected_sum = 0;
@@ -84,9 +87,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

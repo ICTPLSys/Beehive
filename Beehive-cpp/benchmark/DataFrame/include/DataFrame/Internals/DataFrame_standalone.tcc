@@ -36,11 +36,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace hmdf
 {
 template <typename T, size_t GroupSize>
-static inline void _sort_by_sorted_index_(Beehive::FarVector<T, GroupSize>& to_be_sorted,
-                                          Beehive::FarVector<size_t>& sorting_idxs, size_t idx_s)
+static inline void _sort_by_sorted_index_(FarLib::FarVector<T, GroupSize>& to_be_sorted,
+                                          FarLib::FarVector<size_t>& sorting_idxs, size_t idx_s)
 {
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
     if (idx_s > 0) {
         idx_s -= 1;
         struct Scope : public RootDereferenceScope {
@@ -95,13 +95,13 @@ static inline void _sort_by_sorted_index_(Beehive::FarVector<T, GroupSize>& to_b
 }
 
 template <Algorithm alg, typename T>
-static inline void _sort_by_sorted_index_copy_(Beehive::FarVector<T>& to_be_sorted,
-                                               Beehive::FarVector<size_t>& sorting_idxs,
+static inline void _sort_by_sorted_index_copy_(FarLib::FarVector<T>& to_be_sorted,
+                                               FarLib::FarVector<size_t>& sorting_idxs,
                                                size_t idx_s)
 {
-    using namespace Beehive;
-    using namespace Beehive::cache;
-    Beehive::FarVector<T> result;
+    using namespace FarLib;
+    using namespace FarLib::cache;
+    FarLib::FarVector<T> result;
     result.template resize<true>(to_be_sorted.size());
     const size_t thread_cnt =
         alg == UTHREAD ? uthread::get_thread_count() * UTH_FACTOR : uthread::get_thread_count();

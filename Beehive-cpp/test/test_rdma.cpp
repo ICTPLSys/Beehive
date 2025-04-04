@@ -6,8 +6,8 @@
 #include "rdma/server.hpp"
 #include "utils/control.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 int main() {
@@ -18,7 +18,7 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);  // wait for server start, FIXME
-    Beehive::runtime_init(config, false);
+    FarLib::runtime_init(config, false);
     Client *client = Client::get_default();
     int *buffer = static_cast<int *>(client->get_buffer());
     buffer[0] = 0x666;
@@ -46,7 +46,7 @@ int main() {
         }
         ASSERT(buffer[1] == 0x666);
     }
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

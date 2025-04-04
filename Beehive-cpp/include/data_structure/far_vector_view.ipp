@@ -3,12 +3,12 @@
 #include "data_structure/far_vector.hpp"
 #include "data_structure/view.hpp"
 
-namespace Beehive {
+namespace FarLib {
 template <VecElementType T, size_t GroupSize>
 template <bool Mut>
 class FarVector<T, GroupSize>::VectorView
-    : public Beehive::FarView::View<T, Mut,
-                                    FarVector<T, GroupSize>::VectorView<Mut>> {
+    : public FarLib::FarView::View<T, Mut,
+                                   FarVector<T, GroupSize>::VectorView<Mut>> {
     using Pointer = FarVector<T, GroupSize>::Pointer;
 
 private:
@@ -20,13 +20,12 @@ public:
         : start(std::forward<Pointer>(start)),
           end(std::forward<Pointer>(end)) {}
     template <typename Func>
-    void for_each_impl(Func &&func) {
-        RootDereferenceScope scope;
-        auto ed = this->end.template get_iterator<Mut>(scope);
-        for (auto it = this->start.template get_iterator<Mut>(scope); it < ed;
+    void for_each_impl(Func &&func, DereferenceScope &scope) {
+        auto ed = this->end.template get_lite_iterator<Mut>(scope);
+        for (auto it = this->start.template get_lite_iterator<Mut>(scope); it < ed;
              it.next(scope)) {
             func(*it);
         }
     }
 };
-}  // namespace Beehive
+}  // namespace FarLib

@@ -5,8 +5,8 @@
 #include "utils/cpu_cycles.hpp"
 #include "utils/parallel.hpp"
 
-using namespace Beehive;
-using namespace Beehive::allocator;
+using namespace FarLib;
+using namespace FarLib::allocator;
 
 int main() {
     constexpr size_t ThreadCount = 4;

@@ -162,9 +162,9 @@ HeteroVector DataFrame<I, H>::get_row(size_type row_num,
 
 template <typename I, typename H>
 template <Algorithm alg, typename T>
-Beehive::FarVector<T> DataFrame<I, H>::get_col_unique_values(const char* name) const
+FarLib::FarVector<T> DataFrame<I, H>::get_col_unique_values(const char* name) const
 {
-    using namespace Beehive;
+    using namespace FarLib;
     auto hash_func = [](std::reference_wrapper<const T> v) -> std::size_t {
         return (std::hash<T>{}(v.get()));
     };
@@ -180,8 +180,8 @@ Beehive::FarVector<T> DataFrame<I, H>::get_col_unique_values(const char* name) c
 
 template <typename I, typename H>
 template <Algorithm alg, typename T, typename F>
-Beehive::FarVector<T> DataFrame<I, H>::get_col_unique_values(const char* name, F&& func,
-                                                             size_t uthread_cnt) const
+FarLib::FarVector<T> DataFrame<I, H>::get_col_unique_values(const char* name, F&& func,
+                                                            size_t uthread_cnt) const
 {
     auto hash_func = [&func](std::reference_wrapper<const T> v) -> std::size_t {
         return (std::hash<size_t>{}(func(v.get())));
@@ -200,8 +200,8 @@ template <Algorithm alg, typename T, typename U, typename F>
 std::unordered_map<U, size_t> DataFrame<I, H>::get_column_elem_count(const char* name, F&& func,
                                                                      size_t uthread_cnt) const
 {
-    using namespace Beehive::cache;
-    using namespace Beehive;
+    using namespace FarLib::cache;
+    using namespace FarLib;
     const ColumnVecType<T>& vec = get_column<T>(name);
     std::cout << "vector memory occupied: " << vec.size() * sizeof(T) << std::endl;
     using map_t = std::unordered_map<U, size_t>;
@@ -238,20 +238,20 @@ std::unordered_map<U, size_t> DataFrame<I, H>::get_column_elem_count(const char*
 
 template <typename I, typename H>
 template <Algorithm alg, typename T, typename HASH_F, typename EQUAL_F>
-Beehive::FarVector<T> DataFrame<I, H>::get_col_unique_values_impl(const char* name,
-                                                                  HASH_F&& hash_func,
-                                                                  EQUAL_F&& equal_func,
-                                                                  size_t uthread_cnt) const
+FarLib::FarVector<T> DataFrame<I, H>::get_col_unique_values_impl(const char* name,
+                                                                 HASH_F&& hash_func,
+                                                                 EQUAL_F&& equal_func,
+                                                                 size_t uthread_cnt) const
 {
     // auto sstart = get_cycles();
-    using namespace Beehive::cache;
-    using namespace Beehive;
+    using namespace FarLib::cache;
+    using namespace FarLib;
     const ColumnVecType<T>& vec = get_column<T>(name);
 
     std::unordered_set<typename std::reference_wrapper<T>::type, HASH_F, EQUAL_F> table(
         0, hash_func, equal_func);
     bool counted_nan = false;
-    Beehive::FarVector<T> result;
+    FarLib::FarVector<T> result;
 
     result.reserve(vec.size());
     if constexpr (alg == DEFAULT) {
@@ -410,8 +410,8 @@ template <typename I, typename H>
 template <Algorithm alg, typename T, typename V>
 V& DataFrame<I, H>::visit(const char* name, V& visitor)
 {
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
     auto& vec             = get_column<T>(name);
     const size_type idx_s = indices_.size();
     const size_type min_s = std::min<size_type>(vec.size(), idx_s);
@@ -861,21 +861,18 @@ std::future<V&> DataFrame<I, H>::single_act_visit_async(const char* name1, const
 
 template <typename I, typename H>
 template <typename... Ts>
-DataFrame<I, H> DataFrame<I, H>::get_data_by_idx(Index2D<IndexType> range) const
+DataFrame<I, H> DataFrame<I, H>::get_data_by_idx(Index2D<IndexType> range, DereferenceScope &scope) const
 {
-    const auto& lower = std::lower_bound(indices_.begin(), indices_.end(), range.begin);
-    const auto& upper = std::upper_bound(indices_.begin(), indices_.end(), range.end);
+    const size_t lower = indices_.lower_bound(range.begin, scope);
+    const size_t upper = indices_.upper_bound(range.end, scope);
     DataFrame df;
 
-    if (lower != indices_.end()) {
-        {
-            RootDereferenceScope scope;
-            df.load_index(lower, upper, scope);
-        }
+    if (lower != indices_.size()) {
+        df.load_index(lower, upper, scope);
 
-        const size_type b_dist = lower - indices_.begin();
+        const size_type b_dist = lower;
         const size_type e_dist =
-            (upper < indices_.end() ? upper : indices_.end()) - indices_.begin();
+            upper < indices_.size() ? upper : indices_.size();
 
         for (auto& iter : column_tb_) {
             load_functor_<DataFrame, Ts...> functor(iter.first.c_str(), b_dist, e_dist, df);
@@ -1139,216 +1136,195 @@ template <Algorithm alg, bool trivial_opt, typename T, typename F, typename... T
 DataFrame<I, H> DataFrame<I, H>::get_data_by_sel(const char* name, F& sel_functor) const
 {
     // auto sstart = get_cycles();
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
     const ColumnVecType<T>& vec = get_column<T>(name);
     const size_type idx_s       = indices_.size();
     const size_type col_s       = vec.size();
-    Beehive::FarVector<size_type> col_indices;
+    FarLib::FarVector<size_type> col_indices;
     // col_indices.reserve(idx_s / 2);
     // auto start = get_cycles();
     // profile::reset_all();
-    if constexpr (alg == DEFAULT) {
-        for (size_type i = 0; i < col_s; ++i)
-            if constexpr (trivial_opt) {
-                if (sel_functor(i, *vec[i])) col_indices.push_back_slow(i);
-            } else {
-                if (sel_functor(*indices_[i], *vec[i])) col_indices.push_back_slow(i);
+    // only available if index = [0...idx_s - 1]
+    const size_t thread_cnt =
+        alg == UTHREAD ? uthread::get_thread_count() * UTH_FACTOR : uthread::get_thread_count();
+    // aligned to group
+    const size_t block = ((idx_s + vec.GROUP_SIZE - 1) / vec.GROUP_SIZE + thread_cnt - 1) /
+                         thread_cnt * vec.GROUP_SIZE;
+    std::vector<FarVector<size_t>> uthread_indices(thread_cnt);
+    for (auto& v : uthread_indices) {
+        v.reserve(block);
+    }
+    // auto start = get_cycles();
+    uthread::parallel_for_with_scope<1>(
+        thread_cnt, thread_cnt, [&](size_t i, DereferenceScope& scope) {
+            auto& u_indices        = uthread_indices[i];
+            const size_t idx_start = i * block;
+            const size_t idx_end   = std::min(idx_start + block, idx_s);
+            if (idx_start >= idx_end) {
+                return;
             }
-    } else {
-        // only available if index = [0...idx_s - 1]
-        const size_t thread_cnt =
-            alg == UTHREAD ? uthread::get_thread_count() * UTH_FACTOR : uthread::get_thread_count();
-        // aligned to group
-        const size_t block = ((idx_s + vec.GROUP_SIZE - 1) / vec.GROUP_SIZE + thread_cnt - 1) /
-                             thread_cnt * vec.GROUP_SIZE;
-        std::vector<FarVector<size_t>> uthread_indices(thread_cnt);
-        for (auto& v : uthread_indices) {
-            v.reserve(block);
-        }
-        // auto start = get_cycles();
-        uthread::parallel_for_with_scope<1>(
-            thread_cnt, thread_cnt, [&](size_t i, DereferenceScope& scope) {
-                auto& u_indices        = uthread_indices[i];
-                const size_t idx_start = i * block;
-                const size_t idx_end   = std::min(idx_start + block, idx_s);
-                if (idx_start >= idx_end) {
-                    return;
-                }
-                ON_MISS_BEGIN
-                uthread::yield();
-                ON_MISS_END
-                if constexpr (trivial_opt) {
-                    using vec_it_t = decltype(vec.clbegin());
-                    struct Scope : public DereferenceScope {
-                        vec_it_t vec_it;
-
-                        void pin() const override
-                        {
-                            vec_it.pin();
-                        }
-
-                        void unpin() const override
-                        {
-                            vec_it.unpin();
-                        }
-
-                        Scope(DereferenceScope* scope) : DereferenceScope(scope) {}
-                    } scp(&scope);
-                    if constexpr (alg == UTHREAD) {
-                        scp.vec_it = vec.get_const_lite_iter(idx_start, scp, __on_miss__, idx_start,
-                                                             idx_end);
-                        for (size_t idx = idx_start; idx < idx_end;
-                             idx++, scp.vec_it.next(scp, __on_miss__)) {
-                            if (sel_functor(idx, *(scp.vec_it))) {
-                                u_indices.push_back(idx, scp);
-                            }
-                        }
-                    } else if constexpr (alg == PARAROUTINE || alg == PREFETCH) {
-                        scp.vec_it = vec.get_const_lite_iter(idx_start, scp, idx_start, idx_end);
-                        for (size_t idx = idx_start; idx < idx_end;
-                             idx += vec.GROUP_SIZE, scp.vec_it.next_group(scp)) {
-                            auto& vec_group = *scp.vec_it.get_group_accessor();
-                            for (size_t ii = 0; ii < std::min(idx_end - idx, vec.GROUP_SIZE);
-                                 ii++) {
-                                if (sel_functor(idx + ii, vec_group[ii])) {
-                                    u_indices.push_back(idx + ii, scp);
-                                }
-                            }
-                        }
-                    } else {
-                        ERROR("algorithm dont exist");
-                    }
-                } else {
-                    using vec_it_t = decltype(vec.clbegin());
-                    using idx_it_t = decltype(indices_.clbegin());
-                    struct Scope : public DereferenceScope {
-                        vec_it_t vec_it;
-                        idx_it_t idx_it;
-                        void pin() const override
-                        {
-                            vec_it.pin();
-                            idx_it.pin();
-                        }
-
-                        void unpin() const override
-                        {
-                            vec_it.unpin();
-                            idx_it.unpin();
-                        }
-
-                        void next(__DMH__)
-                        {
-                            vec_it.next(*this, __on_miss__);
-                            idx_it.next(*this, __on_miss__);
-                        }
-
-                        void next()
-                        {
-                            vec_it.next(*this);
-                            idx_it.next(*this);
-                        }
-                        Scope(DereferenceScope* scope) : DereferenceScope(scope) {}
-                    } scp(&scope);
-                    if constexpr (alg == UTHREAD) {
-                        scp.vec_it = vec.get_const_lite_iter(idx_start, scp, __on_miss__, idx_start,
-                                                             idx_end);
-                        scp.idx_it = indices_.get_const_lite_iter(idx_start, scp, __on_miss__,
-                                                                  idx_start, idx_end);
-                        for (size_t idx = idx_start; idx < idx_end; idx++, scp.next(__on_miss__)) {
-                            if (sel_functor(*(scp.idx_it), *(scp.vec_it))) {
-                                u_indices.push_back(idx, scp);
-                            }
-                        }
-                    } else if constexpr (alg == PARAROUTINE || alg == PREFETCH) {
-                        scp.vec_it = vec.get_const_lite_iter(idx_start, scp, idx_start, idx_end);
-                        scp.idx_it =
-                            indices_.get_const_lite_iter(idx_start, scp, idx_start, idx_end);
-                        for (size_t idx = idx_start; idx < idx_end; idx++, scp.next()) {
-                            if (sel_functor(*(scp.idx_it), *(scp.vec_it))) {
-                                u_indices.push_back(idx, scp);
-                            }
-                        }
-                    }
-                }
-            });
-        // auto end = get_cycles();
-        // std::cout << "uindices get: " << end - start << std::endl;
-        std::vector<size_t> sizes(thread_cnt + 1);
-        sizes[0] = 0;
-        for (size_t i = 1; i <= thread_cnt; i++) {
-            sizes[i] = sizes[i - 1] + uthread_indices[i - 1].size();
-        }
-        // for (auto siz : sizes) {
-        //     std::cout << siz << ", ";
-        // }
-        // std::cout << std::endl;
-        size_t sum_size = sizes[thread_cnt];
-        col_indices.template resize<true>(sum_size);
-        // start = get_cycles();
-        uthread::parallel_for_with_scope<1>(
-            thread_cnt, thread_cnt, [&](size_t i, DereferenceScope& scope) {
-                auto& u_indices = uthread_indices[i];
-                using u_it_t    = decltype(u_indices.clbegin());
-                using it_t      = decltype(col_indices.lbegin());
-
-                ON_MISS_BEGIN
-                uthread::yield();
-                ON_MISS_END
+            ON_MISS_BEGIN
+            uthread::yield();
+            ON_MISS_END
+            if constexpr (trivial_opt) {
+                using vec_it_t = decltype(vec.clbegin());
                 struct Scope : public DereferenceScope {
-                    u_it_t u_it;
-                    it_t it;
-
+                    vec_it_t vec_it;
                     void pin() const override
                     {
-                        u_it.pin();
-                        it.pin();
+                        vec_it.pin();
                     }
-
                     void unpin() const override
                     {
-                        u_it.unpin();
-                        it.unpin();
+                        vec_it.unpin();
                     }
-
-                    void next(__DMH__)
-                    {
-                        u_it.next(*this, __on_miss__);
-                        it.next(*this, __on_miss__);
-                    }
-
-                    void next()
-                    {
-                        u_it.next(*this);
-                        it.next(*this);
-                    }
-
                     Scope(DereferenceScope* scope) : DereferenceScope(scope) {}
                 } scp(&scope);
-                const size_t idx_start = sizes[i];
-                const size_t idx_end   = sizes[i + 1];
-                if (idx_start >= idx_end) {
-                    return;
-                }
                 if constexpr (alg == UTHREAD) {
-                    scp.u_it = u_indices.clbegin(scp, __on_miss__);
-                    scp.it =
-                        col_indices.get_lite_iter(idx_start, scp, __on_miss__, idx_start, idx_end);
-                    for (size_t idx = idx_start; idx < idx_end; idx++, scp.next(__on_miss__)) {
-                        *(scp.it) = *(scp.u_it);
+                    scp.vec_it = vec.get_const_lite_iter(idx_start, scp, __on_miss__, idx_start,
+                                                         idx_end);
+                    for (size_t idx = idx_start; idx < idx_end;
+                         idx++, scp.vec_it.next(scp, __on_miss__)) {
+                        if (sel_functor(idx, *(scp.vec_it))) {
+                            u_indices.push_back(idx, scp);
+                        }
                     }
                 } else if constexpr (alg == PARAROUTINE || alg == PREFETCH) {
-                    // TODO pararoutine
-                    scp.u_it = u_indices.clbegin(scp);
-                    scp.it   = col_indices.get_lite_iter(idx_start, scp, idx_start, idx_end);
+                    scp.vec_it = vec.get_const_lite_iter(idx_start, scp, idx_start, idx_end);
+                    for (size_t idx = idx_start; idx < idx_end;
+                         idx += vec.GROUP_SIZE, scp.vec_it.next_group(scp)) {
+                        auto& vec_group = *scp.vec_it.get_group_accessor();
+                        for (size_t ii = 0; ii < std::min(idx_end - idx, vec.GROUP_SIZE);
+                             ii++) {
+                            if (sel_functor(idx + ii, vec_group[ii])) {
+                                u_indices.push_back(idx + ii, scp);
+                            }
+                        }
+                    }
+                } else {
+                    ERROR("algorithm dont exist");
+                }
+            } else {
+                using vec_it_t = decltype(vec.clbegin());
+                using idx_it_t = decltype(indices_.clbegin());
+                struct Scope : public DereferenceScope {
+                    vec_it_t vec_it;
+                    idx_it_t idx_it;
+                    void pin() const override
+                    {
+                        vec_it.pin();
+                        idx_it.pin();
+                    }
+                    void unpin() const override
+                    {
+                        vec_it.unpin();
+                        idx_it.unpin();
+                    }
+                    void next(__DMH__)
+                    {
+                        vec_it.next(*this, __on_miss__);
+                        idx_it.next(*this, __on_miss__);
+                    }
+                    void next()
+                    {
+                        vec_it.next(*this);
+                        idx_it.next(*this);
+                    }
+                    Scope(DereferenceScope* scope) : DereferenceScope(scope) {}
+                } scp(&scope);
+                if constexpr (alg == UTHREAD) {
+                    scp.vec_it = vec.get_const_lite_iter(idx_start, scp, __on_miss__, idx_start,
+                                                         idx_end);
+                    scp.idx_it = indices_.get_const_lite_iter(idx_start, scp, __on_miss__,
+                                                              idx_start, idx_end);
+                    for (size_t idx = idx_start; idx < idx_end; idx++, scp.next(__on_miss__)) {
+                        if (sel_functor(*(scp.idx_it), *(scp.vec_it))) {
+                            u_indices.push_back(idx, scp);
+                        }
+                    }
+                } else if constexpr (alg == PARAROUTINE || alg == PREFETCH) {
+                    scp.vec_it = vec.get_const_lite_iter(idx_start, scp, idx_start, idx_end);
+                    scp.idx_it =
+                        indices_.get_const_lite_iter(idx_start, scp, idx_start, idx_end);
                     for (size_t idx = idx_start; idx < idx_end; idx++, scp.next()) {
-                        *(scp.it) = *(scp.u_it);
+                        if (sel_functor(*(scp.idx_it), *(scp.vec_it))) {
+                            u_indices.push_back(idx, scp);
+                        }
                     }
                 }
-            });
-        // end = get_cycles();
-        // std::cout << "uindice assign back: " << end - start << std::endl;
+            }
+        });
+    // auto end = get_cycles();
+    // std::cout << "uindices get: " << end - start << std::endl;
+    std::vector<size_t> sizes(thread_cnt + 1);
+    sizes[0] = 0;
+    for (size_t i = 1; i <= thread_cnt; i++) {
+        sizes[i] = sizes[i - 1] + uthread_indices[i - 1].size();
     }
+    // for (auto siz : sizes) {
+    //     std::cout << siz << ", ";
+    // }
+    // std::cout << std::endl;
+    size_t sum_size = sizes[thread_cnt];
+    col_indices.template resize<true>(sum_size);
+    // start = get_cycles();
+    uthread::parallel_for_with_scope<1>(
+        thread_cnt, thread_cnt, [&](size_t i, DereferenceScope& scope) {
+            auto& u_indices = uthread_indices[i];
+            using u_it_t    = decltype(u_indices.clbegin());
+            using it_t      = decltype(col_indices.lbegin());
+            ON_MISS_BEGIN
+            uthread::yield();
+            ON_MISS_END
+            struct Scope : public DereferenceScope {
+                u_it_t u_it;
+                it_t it;
+                void pin() const override
+                {
+                    u_it.pin();
+                    it.pin();
+                }
+                void unpin() const override
+                {
+                    u_it.unpin();
+                    it.unpin();
+                }
+                void next(__DMH__)
+                {
+                    u_it.next(*this, __on_miss__);
+                    it.next(*this, __on_miss__);
+                }
+                void next()
+                {
+                    u_it.next(*this);
+                    it.next(*this);
+                }
+                Scope(DereferenceScope* scope) : DereferenceScope(scope) {}
+            } scp(&scope);
+            const size_t idx_start = sizes[i];
+            const size_t idx_end   = sizes[i + 1];
+            if (idx_start >= idx_end) {
+                return;
+            }
+            if constexpr (alg == UTHREAD) {
+                scp.u_it = u_indices.clbegin(scp, __on_miss__);
+                scp.it =
+                    col_indices.get_lite_iter(idx_start, scp, __on_miss__, idx_start, idx_end);
+                for (size_t idx = idx_start; idx < idx_end; idx++, scp.next(__on_miss__)) {
+                    *(scp.it) = *(scp.u_it);
+                }
+            } else if constexpr (alg == PARAROUTINE || alg == PREFETCH) {
+                // TODO pararoutine
+                scp.u_it = u_indices.clbegin(scp);
+                scp.it   = col_indices.get_lite_iter(idx_start, scp, idx_start, idx_end);
+                for (size_t idx = idx_start; idx < idx_end; idx++, scp.next()) {
+                    *(scp.it) = *(scp.u_it);
+                }
+            }
+        });
+    // end = get_cycles();
+    // std::cout << "uindice assign back: " << end - start << std::endl;
     // auto end = get_cycles();
     // std::cout << "get col indices: " << end - start << std::endl;
     // profile::print_profile_data();

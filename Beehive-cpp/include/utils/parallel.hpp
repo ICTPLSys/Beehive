@@ -4,7 +4,7 @@
 #include "cache/cache.hpp"
 #include "utils/fork_join.hpp"
 
-namespace Beehive {
+namespace FarLib {
 namespace uthread {
 template <typename Fn>
 inline void spawn(Fn &&fn) {
@@ -127,4 +127,4 @@ void parallel_for_with_scope(size_t max_thread_count, size_t n, Fn &&fn,
 
 }  // namespace uthread
 
-}  // namespace Beehive
+}  // namespace FarLib

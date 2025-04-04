@@ -1,6 +1,4 @@
-#include <chrono>
 #include <cstdlib>
-#include <iostream>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -8,13 +6,12 @@
 
 #include "cache/cache.hpp"
 #include "data_structure/hopscotch.hpp"
-#include "rdma/client.hpp"
 #include "rdma/server.hpp"
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 Configure config;
@@ -58,16 +55,6 @@ void test_hopscotch() {
 
     // test read
     std::uniform_int_distribution<int> idx_dist(0, ObjectCount - 1);
-    for (int i = 0; i < TestCount; i++) {
-        int idx = idx_dist(re);
-        int test_key = test_data[idx];
-        HopscotchObject obj = *hashmap.get(test_key, __on_miss__);
-        ASSERT(obj.key == test_key);
-        int value_expected = std_hashmap[test_key];
-        ASSERT(obj.value == value_expected);
-    }
-
-    // test read in scope
     {
         RootDereferenceScope scope;
         for (int i = 0; i < TestCount; i++) {
@@ -81,28 +68,6 @@ void test_hopscotch() {
     }
 
     // test modify
-    {
-        std::vector<size_t> modified_idxs;
-        for (int i = 0; i < TestCount; i++) {
-            int idx = idx_dist(re);
-            int test_key = test_data[idx];
-            int new_value = dist(re);
-            auto accessor = hashmap.get(test_key, __on_miss__).as_mut();
-            accessor->value = new_value;
-            std_hashmap[test_key] = new_value;
-            modified_idxs.push_back(idx);
-        }
-
-        for (int i = 0; i < TestCount; i++) {
-            int idx = modified_idxs[i];
-            int test_key = test_data[idx];
-            int value = hashmap.get(test_key, __on_miss__)->value;
-            int value_expected = std_hashmap[test_key];
-            ASSERT(value == value_expected);
-        }
-    }
-
-    // test modify in scope
     {
         RootDereferenceScope scope;
         std::vector<size_t> modified_idxs;
@@ -126,25 +91,24 @@ void test_hopscotch() {
     }
 
     // test erase
-    std::vector<size_t> erased_idxs;
-    for (int i = 0; i < TestCount; i++) {
-        int idx = idx_dist(re);
-        int test_key = test_data[idx];
-        auto accessor = hashmap.remove(test_key, __on_miss__);
-        bool existed = !accessor.is_null();
-        size_t erased_count = std_hashmap.erase(test_key);
-        ASSERT(existed == (erased_count != 0));
-        erased_idxs.push_back(idx);
-        if (existed) {
-            accessor.deallocate();
+    {
+        RootDereferenceScope scope;
+        std::vector<size_t> erased_idxs;
+        for (int i = 0; i < TestCount; i++) {
+            int idx = idx_dist(re);
+            int test_key = test_data[idx];
+            bool existed = hashmap.remove(test_key, __on_miss__, scope);
+            size_t erased_count = std_hashmap.erase(test_key);
+            ASSERT(existed == (erased_count != 0));
+            erased_idxs.push_back(idx);
         }
-    }
 
-    for (int i = 0; i < TestCount; i++) {
-        int idx = erased_idxs[i];
-        int test_key = test_data[idx];
-        auto accessor = hashmap.get(test_key, __on_miss__);
-        ASSERT(accessor.is_null());
+        for (int i = 0; i < TestCount; i++) {
+            int idx = erased_idxs[i];
+            int test_key = test_data[idx];
+            auto accessor = hashmap.get(test_key, __on_miss__, scope);
+            ASSERT(accessor.is_null());
+        }
     }
 }
 
@@ -158,9 +122,9 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test_hopscotch();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

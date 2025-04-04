@@ -10,18 +10,18 @@
 #include "cache/region_based_allocator.hpp"
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace allocator {
 
 namespace remote {
 constexpr size_t RegionSize = 512 * 1024;
-using Beehive::allocator::BinSize;
-using Beehive::allocator::RegionBinCount;
+using FarLib::allocator::BinSize;
+using FarLib::allocator::RegionBinCount;
 
-using Beehive::allocator::bin_from_wsize;
-using Beehive::allocator::get_bin_size;
-using Beehive::allocator::wsize_from_size;
+using FarLib::allocator::bin_from_wsize;
+using FarLib::allocator::get_bin_size;
+using FarLib::allocator::wsize_from_size;
 
 constexpr uint64_t InvalidRemoteAddr = std::numeric_limits<uint64_t>::max();
 // definition is the same as RegionHead
@@ -425,4 +425,4 @@ extern thread_local RemoteThreadHeap remote_thread_heap;
 
 }  // namespace remote
 }  // namespace allocator
-}  // namespace Beehive
+}  // namespace FarLib

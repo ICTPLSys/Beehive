@@ -39,7 +39,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace hmdf
 {
-using namespace Beehive::cache;
+using namespace FarLib::cache;
 template <typename I, typename H>
 template <typename T>
 HeteroVector::WrappedVector<T>& DataFrame<I, H>::create_column(const char* name)
@@ -183,8 +183,11 @@ typename DataFrame<I, H>::size_type DataFrame<I, H>::load_index(const ITR& begin
     static_assert(std::is_base_of<HeteroVector, DataVec>::value,
                   "Only a StdDataFrame can call load_index()");
     IndexVecType new_indices_;
-    for (auto it = begin; it < end; it++) {
+    auto it = indices_.lbegin(scope);
+    it.nextn(begin, scope);
+    for (size_t i = 0; i < end - begin; i++) {
         new_indices_.push_back(*it, scope);
+        it.next(scope);
     }
     indices_.clear();
     std::swap(indices_, new_indices_);
@@ -297,6 +300,89 @@ typename DataFrame<I, H>::size_type DataFrame<I, H>::append_index(const IndexTyp
 }
 
 // ----------------------------------------------------------------------------
+
+template <typename I, typename H>
+template <typename T, typename IDX>
+typename DataFrame<I, H>::size_type DataFrame<I, H>::load_column(const char* name,
+                                                                 Index2D<const IDX> range,
+                                                                 const HeteroVector::WrappedVector<T>& vec,
+                                                                 DereferenceScope& scope,
+                                                                 nan_policy padding)
+{
+    size_type s           = range.end - range.begin;
+    const size_type idx_s = indices_.size();
+
+    if (s > idx_s) {
+        char buffer[512];
+
+        sprintf(buffer,
+                "DataFrame::load_column(): ERROR: "
+#ifdef _WIN32
+                "data size of %zu is larger than index size of %zu",
+#else
+                "data size of %lu is larger than index size of %lu",
+#endif  // _WIN32
+                s, idx_s);
+        throw InconsistentData(buffer);
+    }
+
+    const auto iter         = column_tb_.find(name);
+    HeteroVector::WrappedVector<T>* vec_ptr = nullptr;
+
+    if (iter == column_tb_.end())
+        vec_ptr = &(create_column<T>(name));
+    else {
+        DataVec& hv = data_[iter->second];
+        const SpinGuard guard(lock_);
+
+        vec_ptr = &(hv.template get_vector<T>());
+    }
+
+    vec_ptr->resize(s, scope);
+    struct Scope : public DereferenceScope {
+        using dst_it_t = decltype(vec_ptr->lbegin(scope));
+        using src_it_t = decltype(vec.lbegin(scope));
+        dst_it_t dst_it;
+        src_it_t src_it;
+
+        Scope(DereferenceScope* scope) : DereferenceScope(scope) {}
+
+        void pin() const override
+        {
+            dst_it.pin();
+            src_it.pin();
+        }
+
+        void unpin() const override
+        {
+            dst_it.unpin();
+            src_it.unpin();
+        }
+    };
+    {
+        Scope scp(&scope);
+        scp.dst_it = vec_ptr->lbegin(scp);
+        scp.src_it = vec.lbegin(scp);
+        scp.src_it.nextn(range.begin, scp);
+        for (size_type i = 0; i < s; ++i) {
+            *(scp.dst_it) = *(scp.src_it);
+            scp.dst_it.next(scp);
+            scp.src_it.next(scp);
+        }
+    }
+
+    size_type ret_cnt = s;
+
+    s = vec_ptr->size();
+    if (padding == nan_policy::pad_with_nans && s < idx_s) {
+        for (size_type i = 0; i < idx_s - s; ++i) {
+            vec_ptr->push_back(std::move(_get_nan<T>()), scope);
+            ret_cnt += 1;
+        }
+    }
+
+    return (ret_cnt);
+}
 
 template <typename I, typename H>
 template <typename T, typename ITR>
@@ -426,8 +512,8 @@ typename DataFrame<I, H>::size_type DataFrame<I, H>::load_column(
     const char* name, typename H::WrappedVector<T>&& data, nan_policy padding)
 {
     auto sstart = get_cycles();
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
     const size_type idx_s  = indices_.size();
     const size_type data_s = data.size();
 
@@ -597,8 +683,8 @@ typename DataFrame<I, H>::size_type DataFrame<I, H>::load_column(
     const char* name, const typename H::WrappedVector<T>& data, nan_policy padding)
 {
     auto sstart = get_cycles();
-    using namespace Beehive;
-    using namespace Beehive::cache;
+    using namespace FarLib;
+    using namespace FarLib::cache;
     const size_type idx_s  = indices_.size();
     const size_type data_s = data.size();
 

@@ -48,7 +48,7 @@ namespace hmdf
 struct HeteroVector {
    public:
     template <typename T>
-    using WrappedVector = Beehive::FarVector<T>;
+    using WrappedVector = FarLib::FarVector<T>;
     using size_type     = size_t;
 
     HeteroVector();

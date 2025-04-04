@@ -9,8 +9,8 @@
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 Configure config;
@@ -186,7 +186,8 @@ void test_get_range(size_t m, size_t n) {
         for (size_t i = 0; i < n / 2; i++) {
             vectors[j].erase_f(i, scope);
         }
-        std::vector<int> elements = vectors[j].get_f(n / 2, n, scope);
+        std::vector<int> elements =
+            vectors[j].get_f(n / 2, n, scope);
         for (int i = 0; i < elements.size(); i++) {
             ASSERT(elements[i] == n / 2 + i + 1);
         }
@@ -231,7 +232,7 @@ int main() {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     // test_insert(512 * 1024, 1024);
     // test_rand_insert(512 * 1024, 1024);
     // test_erase(512 * 1024, 1024);
@@ -239,8 +240,8 @@ int main() {
     // test_rand_insert_f(512 * 1024, 1024);
     // test_erase_f(512 * 1024, 1024);
     // test_get_range(64 * 1024, 1024);
-    test_erase_mult(1, 32 * 1024);
-    Beehive::runtime_destroy();
+    test_erase_mult(1,32 * 1024);
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

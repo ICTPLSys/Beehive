@@ -10,7 +10,7 @@
 
 #include "region_based_allocator.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace cache {
 
@@ -67,14 +67,14 @@ public:
 };
 
 }  // namespace cache
-}  // namespace Beehive
+}  // namespace FarLib
 
 #else
 
 #include <boost/interprocess/allocators/allocator.hpp>
 #include <boost/interprocess/managed_external_buffer.hpp>
 
-namespace Beehive {
+namespace FarLib {
 
 namespace cache {
 
@@ -112,6 +112,6 @@ public:
 
 }  // namespace cache
 
-}  // namespace Beehive
+}  // namespace FarLib
 
 #endif

@@ -200,12 +200,10 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc"
 
 # Build the app binary
 add_executable(main  app/main.cc)
-add_executable(motivation app/motivation.cc)
 
 # Link the DataFrame library to the app binary
 find_package(Threads REQUIRED)
 target_link_libraries(main DataFrame ${COMMON_LIBS} Threads::Threads)
-target_link_libraries(motivation DataFrame ${COMMON_LIBS} Threads::Threads)
 include(InstallBasicPackageFiles)
 if (UNIX)
   install_basic_package_files(${PROJECT_NAME}

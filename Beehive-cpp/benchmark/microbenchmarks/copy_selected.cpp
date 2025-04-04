@@ -6,7 +6,7 @@
 #include "cache/cache.hpp"
 #include "utils/control.hpp"
 
-using namespace Beehive;
+using namespace FarLib;
 
 namespace {
 

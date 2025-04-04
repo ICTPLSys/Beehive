@@ -13,9 +13,9 @@
 #include "cache/cache.hpp"
 #include "utils/linked_list.hpp"
 
-#define PROFILE_STREAM_RUNNER_SCHEDULE
+// #define PROFILE_STREAM_RUNNER_SCHEDULE
 
-namespace Beehive {
+namespace FarLib {
 namespace async {
 
 enum class StreamState { READY, WAITING, FINISHED };
@@ -29,8 +29,8 @@ public:
     inline void app_end() { /* app_cycles += __rdtsc(); */ }
     inline void sched_begin() { sched_cycles -= __rdtsc(); }
     inline void sched_end() { sched_cycles += __rdtsc(); }
-    inline void poll_cq_begin() { sched_cycles += __rdtsc(); }
-    inline void poll_cq_end() { sched_cycles -= __rdtsc(); }
+    inline void poll_cq_begin() { /* poll_cq_cycles -= __rdtsc(); */ }
+    inline void poll_cq_end() { /* poll_cq_cycles += __rdtsc(); */ }
     static inline int64_t get_total_cycles() { return global_total_cycles; }
     static inline int64_t get_app_cycles() { return global_app_cycles; }
     static inline int64_t get_sched_cycles() { return global_sched_cycles; }
@@ -456,4 +456,4 @@ inline void process_pararoutine_stream(Stream &&stream,
         .run();
 }
 
-}  // namespace Beehive
+}  // namespace FarLib

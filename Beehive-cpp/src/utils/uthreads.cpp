@@ -1,8 +1,8 @@
 #include "utils/uthreads.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace uthread {
 EventScope *es;
 }  // namespace uthread
-}  // namespace Beehive
+}  // namespace FarLib

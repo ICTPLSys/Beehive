@@ -10,7 +10,7 @@
 #include "utils/debug.hpp"
 #include "utils/parallel.hpp"
 
-using namespace Beehive;
+using namespace FarLib;
 
 static constexpr size_t MapEntriesShift = 25;
 static constexpr size_t InitElemCount = 1024;
@@ -54,8 +54,7 @@ public:
 void init(KeyGenerator& generator, MapType& map) {
     for (int i = 0; i < InitElemCount; i++) {
         ValueType val = rand();
-        map.put(std::forward<KeyType>(i), std::forward<ValueType>(val),
-                nullptr);
+        map.put(std::forward<KeyType>(i), std::forward<ValueType>(val), nullptr);
         generator.insert_key(i);
     }
 }
@@ -65,9 +64,8 @@ void init(KeyGenerator& generator, MapType& map, StdMapType& std_map) {
         map.put(i, val, nullptr);
         std_map.insert({i, val});
         ValueType v;
-        map.get(
-            i, [&](const KeyType& key, const ValueType& val) { v = val; },
-            nullptr);
+        map.get(i, [&](const KeyType& key, const ValueType& val) { v = val; },
+                nullptr);
         generator.insert_key(i);
     }
 }
@@ -79,9 +77,8 @@ void do_random_op(KeyGenerator& generator, MapType& map) {
     switch (rand() % COUNT) {
     case GET: {
         ValueType v = -1;
-        map.get(
-            k, [&](const KeyType& key, const ValueType& val) { v = val; },
-            nullptr);
+        map.get(k, [&](const KeyType& key, const ValueType& val) { v = val; },
+                nullptr);
         break;
     }
     case PUT: {
@@ -94,8 +91,8 @@ void do_random_op(KeyGenerator& generator, MapType& map) {
         break;
     }
     case UPDATE: {
-        map.update(
-            k, [&](const KeyType& k, ValueType& v) { v = 123456; }, nullptr);
+        map.update(k, [&](const KeyType& k, ValueType& v) { v = 123456; },
+                   nullptr);
         break;
     }
     default:
@@ -113,9 +110,9 @@ void single_thread_test() {
         switch (rand() % COUNT) {
         case GET: {
             ValueType v = -1;
-            map.get(
-                k, [&](const KeyType& key, const ValueType& val) { v = val; },
-                nullptr);
+            map.get(k,
+                    [&](const KeyType& key, const ValueType& val) { v = val; },
+                    nullptr);
             if (!(v == -1 && std_map.count(k) == 0 ||
                   std_map.count(k) != 0 && v == std_map[k])) {
                 std::cout << "v = " << v << std::endl;
@@ -142,9 +139,8 @@ void single_thread_test() {
             break;
         }
         case UPDATE: {
-            map.update(
-                k, [&](const KeyType& k, ValueType& v) { v = 123456; },
-                nullptr);
+            map.update(k, [&](const KeyType& k, ValueType& v) { v = 123456; },
+                       nullptr);
             std_map[k] = 123456;
             break;
         }
@@ -181,14 +177,12 @@ void multithread_test() {
             }
         }
     }
-    parallel_for<1>(ThreadCount, TestElemCount, [&](int i) {
-        map.put(datas[i].first, datas[i].second, nullptr);
-    });
+    parallel_for<1>(ThreadCount, TestElemCount,
+                    [&](int i) { map.put(datas[i].first, datas[i].second, nullptr); });
     for (auto [k, v] : datas) {
-        map.get(
-            k,
-            [&](const KeyType& key, const ValueType& val) { ASSERT(v == val); },
-            nullptr);
+        map.get(k, [&](const KeyType& key, const ValueType& val) {
+            ASSERT(v == val);
+        }, nullptr);
     }
     std::cout << "multithread test end" << std::endl;
 }

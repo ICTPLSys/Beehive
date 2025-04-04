@@ -1,7 +1,5 @@
 #pragma once
 
-#include "selection.hpp"  // IWYU pragma: export
-
 #ifdef NO_REMOTE
 
 #include "no_remote.hpp"  // IWYU pragma: export
@@ -11,3 +9,6 @@
 #include "accessor.hpp"  // IWYU pragma: export
 
 #endif
+
+#define __define_oms__(__scope) \
+    FarLib::cache::OnMissScope oms(__entry__, &__scope);

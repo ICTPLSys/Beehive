@@ -14,7 +14,7 @@
 #include "async/context.hpp"
 #include "dyn_sized_object.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 template <typename T, bool Ordered = false,
           size_t ChunkSizeInByte = 4096 - allocator::BlockHeadSize>
@@ -2208,4 +2208,4 @@ public:
 };
 template <typename T>
 using OrderedVector = FarSmallVector<T, true>;
-}  // namespace Beehive
+}  // namespace FarLib

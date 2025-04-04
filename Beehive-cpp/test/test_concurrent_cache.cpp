@@ -1,17 +1,17 @@
-#include <chrono>
 #include <thread>
 #include <vector>
 
+#include "cache/accessor.hpp"
 #include "cache/cache.hpp"
-#include "rdma/client.hpp"
+#include "cache/scope.hpp"
 #include "rdma/server.hpp"
 #include "utils/control.hpp"
 #include "utils/debug.hpp"
 #include "utils/parallel.hpp"
 
-using namespace Beehive;
-using namespace Beehive::cache;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::cache;
+using namespace FarLib::rdma;
 using namespace std::chrono_literals;
 
 Configure config;
@@ -27,32 +27,34 @@ void test() {
     objs.resize(ObjCount);
 
     // allocation
-    uthread::parallel_for<1>(ThreadCount, ObjCount, [&](size_t i) {
-        auto [obj, ptr] = local_cache->allocate(ObjSize, true);
-        *static_cast<size_t *>(ptr) = i;
-        local_cache->release_cache(obj, true);
-        objs[i] = obj;
-    });
+    uthread::parallel_for_with_scope<1>(
+        ThreadCount, ObjCount, [&](size_t i, DereferenceScope &scope) {
+            auto [obj, ptr] = local_cache->allocate<true>(ObjSize, true, scope);
+            *static_cast<size_t *>(ptr) = i;
+            objs[i] = obj;
+        });
     printf("allocated & initialized\n");
 
     // sync_fetch & write back
-    uthread::parallel_for<1>(ThreadCount, ObjCount, [&](size_t i) {
-        auto obj = objs[i];
-        void *ptr = local_cache->sync_fetch(obj);
-        size_t v = *static_cast<size_t *>(ptr);
-        ASSERT(v == i);
-        *static_cast<size_t *>(ptr) = i * i;
-        local_cache->release_cache(obj, true);
-    });
+    uthread::parallel_for_with_scope<1>(
+        ThreadCount, ObjCount, [&](size_t i, DereferenceScope &scope) {
+            auto obj = objs[i];
+            void *ptr = local_cache->sync_fetch(obj, scope);
+            size_t v = *static_cast<size_t *>(ptr);
+            ASSERT(v == i);
+            *static_cast<size_t *>(ptr) = i * i;
+            local_cache->release_cache(obj, true);
+        });
     printf("modified\n");
 
-    uthread::parallel_for<1>(ThreadCount, ObjCount, [&](size_t i) {
-        auto obj = objs[i];
-        void *ptr = local_cache->sync_fetch(obj);
-        size_t v = *static_cast<size_t *>(ptr);
-        ASSERT(v == i * i);
-        local_cache->release_cache(obj, false);
-    });
+    uthread::parallel_for_with_scope<1>(
+        ThreadCount, ObjCount, [&](size_t i, DereferenceScope &scope) {
+            auto obj = objs[i];
+            void *ptr = local_cache->sync_fetch(obj, scope);
+            size_t v = *static_cast<size_t *>(ptr);
+            ASSERT(v == i * i);
+            local_cache->release_cache(obj, false);
+        });
     printf("verified\n");
 
     size_t expected_sum = 0;
@@ -61,11 +63,12 @@ void test() {
     }
     {
         std::atomic_size_t sum = 0;
-        uthread::parallel_for<1>(ThreadCount, ObjCount, [&](size_t i) {
-            auto obj = objs[i];
-            cache::Accessor<size_t> accessor(obj);
-            sum.fetch_add(*accessor);
-        });
+        uthread::parallel_for_with_scope<1>(
+            ThreadCount, ObjCount, [&](size_t i, DereferenceScope &scope) {
+                auto obj = objs[i];
+                cache::LiteAccessor<size_t> accessor(obj, scope);
+                sum.fetch_add(*accessor);
+            });
         ASSERT(sum.load() == expected_sum);
     }
     printf("tested accessor\n");
@@ -77,11 +80,13 @@ void test() {
         ON_MISS_BEGIN
             on_miss.fetch_add(1);
         ON_MISS_END
-        uthread::parallel_for<1>(ThreadCount, ObjCount, [&](size_t i) {
-            auto obj = objs[i];
-            auto accessor = cache::Accessor<size_t>(obj, __on_miss__);
-            sum += *accessor;
-        });
+        uthread::parallel_for_with_scope<1>(
+            ThreadCount, ObjCount, [&](size_t i, DereferenceScope &scope) {
+                auto obj = objs[i];
+                auto accessor =
+                    cache::LiteAccessor<size_t>(obj, __on_miss__, scope);
+                sum += *accessor;
+            });
 
         ASSERT(sum == expected_sum);
         ASSERT(on_miss >= 0 && on_miss <= objs.size());
@@ -94,7 +99,7 @@ void test() {
         uthread::parallel_for_with_scope<1>(
             ThreadCount, ObjCount, [&](size_t i, DereferenceScope &scope) {
                 ON_MISS_BEGIN
-                    OnMissScope oms(__entry__, &scope);
+                    __define_oms__(scope);
                     for (size_t j = i + 1; j < std::min(ObjCount, i + 16);
                          j++) {
                         Cache::get_default()->prefetch(objs[j], oms);
@@ -111,7 +116,7 @@ void test() {
         uthread::parallel_for_with_scope<1>(
             ThreadCount, ObjCount, [&](size_t i, DereferenceScope &scope) {
                 ON_MISS_BEGIN
-                    OnMissScope oms(__entry__, &scope);
+                    __define_oms__(scope);
                     for (size_t j = i + 1; j < std::min(ObjCount, i + 16);
                          j++) {
                         Cache::get_default()->prefetch(objs[j], oms);
@@ -139,9 +144,9 @@ int main() {
     server.reset(new Server(config));
     std::thread server_thread([] { server->start(); });
     std::this_thread::sleep_for(1s);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     test();
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     server_thread.join();
     return 0;
 }

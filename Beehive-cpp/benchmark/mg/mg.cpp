@@ -64,8 +64,8 @@ Authors of the C++ code:
 #include "utils/perf.hpp"
 #include "utils/profile.hpp"
 
-using namespace Beehive;
-using namespace Beehive::rdma;
+using namespace FarLib;
+using namespace FarLib::rdma;
 constexpr size_t UthreadCount = 16;
 constexpr size_t perthreadsize = 1;
 #ifndef FORCE_INLINE
@@ -1880,9 +1880,9 @@ void do_work(void* /* arg */) {
         timer_clear(i);
     }
     timer_start(T_BENCH);
-    Beehive::perf_init();
-    Beehive::profile::beehive_profile([&] {
-        Beehive::perf_profile([&] {
+    FarLib::perf_init();
+    FarLib::profile::beehive_profile([&] {
+        FarLib::perf_profile([&] {
             if (timeron) {
                 timer_start(T_RESID2);
             }
@@ -2142,7 +2142,7 @@ static void setup(int* n1, int* n2, int* n3, int k) {
 }
 
 int main(int argc, char** argv) {
-    Beehive::rdma::Configure config;
+    FarLib::rdma::Configure config;
 #ifndef STANDALONE
     if (argc != 2) {
         std::cout << "usage: " << argv[0] << " <configure file>" << std::endl;
@@ -2159,7 +2159,7 @@ int main(int argc, char** argv) {
     Server server(config);
     std::thread server_thread([&server] { server.start(); });
 #endif
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     // ...
     do_work(nullptr);
     std::cout << "The end ..." << std::endl;
@@ -2169,7 +2169,7 @@ int main(int argc, char** argv) {
     std::cout << "clear v" << std::endl;
     r_vec.clear();
     std::cout << "clear r" << std::endl;
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
 #ifdef STANDALONE
     server_thread.join();
 #endif

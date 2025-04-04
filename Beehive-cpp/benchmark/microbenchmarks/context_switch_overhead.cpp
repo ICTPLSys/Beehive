@@ -9,7 +9,7 @@
 #include "utils/parallel.hpp"
 #include "utils/uthreads.hpp"
 
-using namespace Beehive;
+using namespace FarLib;
 
 /*
     local workload:
@@ -145,8 +145,7 @@ void run_local_all() {
 
 #if 1  // uthread count
     for (size_t i = 0; i < 3; i++) {
-        for (UThreadCount = CoreCount; UThreadCount <= 64 * CoreCount;
-             UThreadCount *= 2) {
+        for (UThreadCount = CoreCount; UThreadCount <= 64 * CoreCount; UThreadCount *= 2) {
             run_local(1024);
         }
     }

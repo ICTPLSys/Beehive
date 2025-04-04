@@ -49,7 +49,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace hmdf
 {
-using namespace Beehive::cache;
+using namespace FarLib::cache;
 // I: Index (e.g. Timestamp) type. Although an index column need not necessarily
 //    represent time, it could be any built-in or user-defined type.
 // H: See the static assert below. It can only be either
@@ -236,6 +236,11 @@ class LIBRARY_API DataFrame : public ThreadGranularity
     template <Algorithm alg, typename T>
     size_type load_column(const char* name, typename H::WrappedVector<T>&& data,
                           nan_policy padding = nan_policy::pad_with_nans);
+
+    template <typename T, typename IDX>
+    size_type load_column(const char* name, Index2D<const IDX> range, const HeteroVector::WrappedVector<T>& vec,
+                          DereferenceScope& scope, nan_policy padding);
+
     // This method creates a column similar to above, but assumes data is
     // bucket or bar values. That means the data vector contains statistical
     // figure(s) for time buckets and must be aligned with the index column
@@ -1199,17 +1204,17 @@ class LIBRARY_API DataFrame : public ThreadGranularity
     //   Data type of the named column
     //
     template <Algorithm alg, typename T>
-    [[nodiscard]] Beehive::FarVector<T> get_col_unique_values(const char* name) const;
+    [[nodiscard]] FarLib::FarVector<T> get_col_unique_values(const char* name) const;
 
     template <Algorithm alg, typename T, typename F>
-    [[nodiscard]] Beehive::FarVector<T> get_col_unique_values(const char* name, F&& func,
-                                                              size_t uthread_cnt) const;
+    [[nodiscard]] FarLib::FarVector<T> get_col_unique_values(const char* name, F&& func,
+                                                             size_t uthread_cnt) const;
 
     template <Algorithm alg, typename T, typename HASH_F, typename EQUAL_F>
-    [[nodiscard]] Beehive::FarVector<T> get_col_unique_values_impl(const char* name,
-                                                                   HASH_F&& hash_func,
-                                                                   EQUAL_F&& equal_func,
-                                                                   size_t uthread_cnt) const;
+    [[nodiscard]] FarLib::FarVector<T> get_col_unique_values_impl(const char* name,
+                                                                  HASH_F&& hash_func,
+                                                                  EQUAL_F&& equal_func,
+                                                                  size_t uthread_cnt) const;
 
     template <Algorithm alg, typename T, typename U, typename F>
     [[nodiscard]] std::unordered_map<U, size_t> get_column_elem_count(const char* name, F&& f,
@@ -1225,7 +1230,7 @@ class LIBRARY_API DataFrame : public ThreadGranularity
     //   The begin and end iterators for index specified with index values
     //
     template <typename... Ts>
-    [[nodiscard]] DataFrame get_data_by_idx(Index2D<IndexType> range) const;
+    [[nodiscard]] DataFrame get_data_by_idx(Index2D<IndexType> range, DereferenceScope &scope) const;
 
     // It returns a DataFrame (including the index and data columns)
     // containing the data corresponding to the indices specified in "values"
@@ -2254,7 +2259,7 @@ class LIBRARY_API DataFrame : public ThreadGranularity
     bool write(S& o, io_format iof = io_format::csv) const;
 
     template <typename S, typename... Ts>
-    bool write_with_values_only(S& o, bool values_only, io_format iof) const;
+    bool write_with_values_only(S& o, bool values_only, io_format iof, DereferenceScope &scope) const;
 
     // Same as write() above, but executed asynchronously
     //
@@ -2323,7 +2328,7 @@ class LIBRARY_API DataFrame : public ThreadGranularity
     static void sort_common_(DataFrame<I, H>& df, CF&& comp_func);
 
     template <Algorithm alg, bool Ascend, typename T, typename... Ts>
-    static void sort_common_(DataFrame<I, H>& df, Beehive::FarVector<T>& vec);
+    static void sort_common_(DataFrame<I, H>& df, FarLib::FarVector<T>& vec);
 
     template <typename T>
     static void fill_missing_value_(ColumnVecType<T>& vec, const T& value, int limit,

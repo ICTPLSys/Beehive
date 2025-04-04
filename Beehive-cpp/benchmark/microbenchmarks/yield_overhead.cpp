@@ -11,12 +11,13 @@
 #include <random>
 
 #include "async/scoped_inline_task.hpp"
+#include "cache/accessor.hpp"
 #include "cache/cache.hpp"
 #include "utils/control.hpp"
 #include "utils/parallel.hpp"
 #include "utils/timer.hpp"
 
-using namespace Beehive;
+using namespace FarLib;
 
 constexpr size_t ObjectSize = 256;
 
@@ -30,9 +31,10 @@ struct Object {
 static_assert(ObjectSize == sizeof(Object));
 
 std::unique_ptr<UniqueFarPtr<Object>[]> init_objects(size_t object_count) {
+    RootDereferenceScope scope;
     auto objects = std::make_unique<UniqueFarPtr<Object>[]>(object_count);
     for (size_t i = 0; i < object_count; i++) {
-        auto accessor = objects[i].allocate();
+        auto accessor = objects[i].allocate_lite(scope);
         accessor->id = i;
     }
     return objects;
@@ -120,10 +122,11 @@ size_t run_stackless(auto &random_engine, auto &distribution,
 
 void fetch_only(auto &random_engine, auto &distribution,
                 UniqueFarPtr<Object> *objects, size_t access_count) {
+    RootDereferenceScope scope;
     for (size_t i = 0; i < access_count; i++) {
         size_t idx = distribution(random_engine);
         delay();
-        Cache::get_default()->prefetch(objects[idx].obj());
+        Cache::get_default()->prefetch(objects[idx].obj(), scope);
     }
 }
 
@@ -194,9 +197,9 @@ int main(int argc, const char *const argv[]) {
                   << std::endl;
         return -1;
     }
-    Beehive::rdma::Configure config;
+    FarLib::rdma::Configure config;
     config.from_file(argv[1]);
-    Beehive::runtime_init(config);
+    FarLib::runtime_init(config);
     size_t mem_size = std::atoll(argv[2]);
     size_t access_count = std::atoll(argv[3]);
     if (argc == 5) {
@@ -206,6 +209,6 @@ int main(int argc, const char *const argv[]) {
     ASSERT(mem_size <= config.server_buffer_size);
     ASSERT(access_count > 0);
     run(mem_size / sizeof(Object), access_count);
-    Beehive::runtime_destroy();
+    FarLib::runtime_destroy();
     return 0;
 }

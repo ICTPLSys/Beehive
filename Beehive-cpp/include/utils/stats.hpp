@@ -9,7 +9,7 @@
 
 #include "cpu_cycles.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 namespace profile {
 
@@ -19,8 +19,9 @@ constexpr bool TraceAlloc = false;
 constexpr bool TraceMemoryUsage = false;
 
 namespace enabled {
-constexpr bool Evacuation = Enabled;
-constexpr bool OnMissSchedule = Enabled || true;
+constexpr bool Evacuation = Enabled || true;
+constexpr bool YieldCount = Enabled || true;
+constexpr bool OnMissSchedule = Enabled || false;
 };  // namespace enabled
 
 struct ProfileData {
@@ -42,19 +43,9 @@ struct ProfileData {
     int64_t check_cq_count;
     int64_t mark_count;
     int64_t not_mark_count;
-    int64_t check_cq_success_count;
-    int64_t check_cq_failed_count;
-    int64_t fetch_count;
-    int64_t access_count;
-    int64_t on_miss_enter_count;
-    int64_t present_count;
-    int64_t enqueue_count;
-    int64_t prefetch_count;
     int64_t on_miss_cycles;
     int64_t prefetch_cycles;
-    int64_t rbytes;
-    int64_t wbytes;
-    int64_t deref_count;
+
     ProfileData() { reset(); }
 
     void reset() {
@@ -75,17 +66,8 @@ struct ProfileData {
         check_cq_count = 0;
         mark_count = 0;
         not_mark_count = 0;
-        check_cq_success_count = 0;
-        check_cq_failed_count = 0;
-        fetch_count = 0;
-        access_count = 0;
-        on_miss_enter_count = 0;
-        prefetch_count = 0;
         on_miss_cycles = 0;
         prefetch_cycles = 0;
-        rbytes = 0;
-        wbytes = 0;
-        deref_count = 0;
     }
 };
 
@@ -176,14 +158,9 @@ int64_t collect_mark_cycles();
 int64_t collect_evict_cycles();
 int64_t collect_check_cq_cycles();
 int64_t collect_check_cq_count();
-int64_t collect_poll_count();
-int64_t collect_post_fetch_retry_count();
-int64_t collect_check_cq_success_count();
-int64_t collect_check_cq_failed_count();
-int64_t collect_prefetch_count();
 int64_t collect_on_miss_cycles();
 int64_t collect_prefetch_cycles();
-int64_t collect_deref_count();
+
 void print_profile_data();
 
 inline void resume_work(bool suspended) {
@@ -248,8 +225,10 @@ inline void end_poll() {
     }
 }
 inline void start_yield() {
-    if constexpr (Enabled) {
+    if constexpr (enabled::YieldCount) {
         get_tlpd().yield_count++;
+    }
+    if constexpr (Enabled) {
         get_tlpd().start_yield_cycle = get_cycles();
     }
 }
@@ -265,42 +244,6 @@ inline void end_yield() {
 inline void count_evacuation() {
     if constexpr (enabled::Evacuation) {
         get_tlpd().evacuation_count++;
-    }
-}
-
-inline void count_fetch() {
-    if constexpr (Enabled) {
-        get_tlpd().fetch_count++;
-    }
-}
-
-inline void count_access() {
-    if constexpr (Enabled) {
-        get_tlpd().access_count++;
-    }
-}
-
-inline void count_on_miss() {
-    if constexpr (Enabled) {
-        get_tlpd().on_miss_enter_count++;
-    }
-}
-
-inline void count_present() {
-    if constexpr (Enabled) {
-        get_tlpd().present_count++;
-    }
-}
-
-inline void count_enqueue() {
-    if constexpr (Enabled) {
-        get_tlpd().enqueue_count++;
-    }
-}
-
-inline void count_prefetch(size_t count = 0) {
-    if constexpr (Enabled) {
-        get_tlpd().prefetch_count += count;
     }
 }
 
@@ -321,11 +264,6 @@ inline void end_prefetch() {
         get_tlpd().prefetch_cycles += get_cycles();
 }
 
-inline void count_deref() {
-    if constexpr (Enabled) {
-        get_tlpd().deref_count++;
-    }
-}
 inline int64_t start_mark() {
     if constexpr (enabled::Evacuation) {
         return get_cycles();
@@ -356,6 +294,7 @@ inline void start_fork_join() {
 inline void end_fork_join() {
     if constexpr (Enabled) get_tlpd().fork_join_cycles += get_cycles();
 }
+
 inline void start_check_cq() {
     if constexpr (Enabled) {
         get_tlpd().check_cq_cycles -= get_cycles();
@@ -375,18 +314,6 @@ inline void count_mark() {
 inline void count_not_mark() {
     if constexpr (Enabled) {
         get_tlpd().not_mark_count++;
-    }
-}
-
-inline void count_check_cq_success() {
-    if constexpr (Enabled) {
-        get_tlpd().check_cq_success_count++;
-    }
-}
-
-inline void count_check_cq_failed() {
-    if constexpr (Enabled) {
-        get_tlpd().check_cq_failed_count++;
     }
 }
 
@@ -447,11 +374,8 @@ inline void trace_free_memory_modification(int64_t previous_free_size,
     }
 }
 
-void start_record_bandwidth();
-void end_record_bandwidth();
-
 void print_mem_usage_trace();
 
 }  // namespace profile
 
-}  // namespace Beehive
+}  // namespace FarLib

@@ -13,7 +13,7 @@
 
 #include "utils/debug.hpp"
 
-namespace Beehive {
+namespace FarLib {
 
 // Basic parameters, not configurable
 constexpr size_t PAGE_SIZE = 4096;
@@ -61,11 +61,11 @@ struct Configure {
     void self_check() const {
         std::cerr << max_thread_cnt * qp_count * qp_send_cap << std::endl;
         ASSERT(cq_entries >= max_thread_cnt * qp_count * qp_send_cap);
-        ASSERT(server_buffer_size >= client_buffer_size);
+        // ASSERT(server_buffer_size >= client_buffer_size);
         ASSERT(PAGE_SIZE <= this->server_buffer_size);
         ASSERT(this->check_cq_batch_size <= this->cq_entries);
     }
 };
 
 }  // namespace rdma
-}  // namespace Beehive
+}  // namespace FarLib

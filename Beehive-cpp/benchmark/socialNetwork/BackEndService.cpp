@@ -34,7 +34,7 @@ BackEndService::BackEndService() : states_(States::getInstance()) {}
 
 // ComposeUrls: Shortens URLs found within the post text for display.
 LocalVector<Url> BackEndService::ComposeUrls(
-    const LocalVector<std::string> &urls, Beehive::DereferenceScope &scope) {
+    const LocalVector<std::string> &urls, FarLib::DereferenceScope &scope) {
     LocalVector<Url> target_url_futures;
 
     for (ssize_t i = 0; i < urls.size(); i++) {
@@ -57,7 +57,7 @@ void BackEndService::ComposePost(std::string_view username, int64_t user_id,
                                  const LocalVector<int64_t> &media_ids,
                                  const LocalVector<std::string> &media_types,
                                  const PostType post_type,
-                                 Beehive::DereferenceScope &scope) {
+                                 FarLib::DereferenceScope &scope) {
     auto text_service_return = ComposeText(text, scope);
     // printf("%p compose text end\n", fibre_self());
 
@@ -103,11 +103,11 @@ void BackEndService::ComposePost(std::string_view username, int64_t user_id,
                                  const LocalVector<int64_t> &media_ids,
                                  const LocalVector<std::string> &media_types,
                                  const PostType post_type,
-                                 Beehive::DereferenceScope &scope,
+                                 FarLib::DereferenceScope &scope,
                                  ComposePostReq *req) {
     // compose url
     LocalVector<std::string> urls = MatchUrls(text);
-    Beehive::async::GenericStreamRunner<
+    FarLib::async::GenericStreamRunner<
         sizeof(
             ConcurrentHashMap<FixedSizeString<ShortenedUrlLen>,
                               FixedSizeString<UrlLen>>::PutContext<BoolCont>),
@@ -129,7 +129,7 @@ void BackEndService::ComposePost(std::string_view username, int64_t user_id,
     req->updated_text = ShortenUrlInText(req->text, req->target_urls);
 
     // compose user mention
-    Beehive::async::GenericStreamRunner<sizeof(
+    FarLib::async::GenericStreamRunner<sizeof(
         ConcurrentHashMap<FixedSizeString<UserNameLen>, UserProfile>::
             GetContext<false, ComposeFirstCont<false>>)>
         runner_mention(scope);
@@ -182,8 +182,8 @@ void BackEndService::ComposePost(std::string_view username, int64_t user_id,
 
 // ComposeText: Extracts and shortens URLs within the post text and identifies
 // user mentions.
-TextServiceReturn BackEndService::ComposeText(
-    std::string_view text, Beehive::DereferenceScope &scope) {
+TextServiceReturn BackEndService::ComposeText(std::string_view text,
+                                              FarLib::DereferenceScope &scope) {
     auto target_urls = ComposeUrls(MatchUrls(text), scope);
     auto updated_text = ShortenUrlInText(text, target_urls);
     TextServiceReturn text_service_return;
@@ -197,7 +197,7 @@ TextServiceReturn BackEndService::ComposeText(
 // ComposeUserMentions: Identifies and processes user mentions within a post.
 LocalVector<UserMention> BackEndService::ComposeUserMentions(
     const LocalVector<std::string> &usernames,
-    Beehive::DereferenceScope &scope) {
+    FarLib::DereferenceScope &scope) {
     LocalVector<UserMention> user_mentions;
     for (auto &username : usernames) {
         UserProfile user_profile;
@@ -212,7 +212,7 @@ LocalVector<UserMention> BackEndService::ComposeUserMentions(
 // WriteUserTimeline: Updates the user's personal timeline with a new post.
 void BackEndService::WriteUserTimeline(int64_t post_id, int64_t user_id,
                                        int64_t timestamp,
-                                       Beehive::DereferenceScope &scope) {
+                                       FarLib::DereferenceScope &scope) {
     states_.userid_to_usertimeline_map.insert_or_update(
         user_id, [&](Timeline *ptr) { new (ptr) Timeline(scope); },
         [&](const int64_t &uid, Timeline &v) {
@@ -223,7 +223,7 @@ void BackEndService::WriteUserTimeline(int64_t post_id, int64_t user_id,
 
 // old
 LocalVector<Post> BackEndService::ReadUserTimeline(
-    int64_t user_id, int start, int stop, Beehive::DereferenceScope &scope) {
+    int64_t user_id, int start, int stop, FarLib::DereferenceScope &scope) {
     if (stop <= start || start < 0) {
         return LocalVector<Post>();
     }
@@ -244,13 +244,13 @@ LocalVector<Post> BackEndService::ReadUserTimeline(
 
 // ReadUserTimeline: Retrieves posts from a user's personal timeline.
 LocalVector<Post> BackEndService::ReadUserTimeline(
-    int64_t user_id, int start, int stop, Beehive::DereferenceScope &scope,
+    int64_t user_id, int start, int stop, FarLib::DereferenceScope &scope,
     ReadUserTimelineReq *req) {
     if (stop <= start || start < 0) {
         return LocalVector<Post>();
     }
 
-    Beehive::async::GenericStreamRunner<512> runner(scope);
+    FarLib::async::GenericStreamRunner<512> runner(scope);
 
     states_.userid_to_usertimeline_map.get(
         user_id,
@@ -271,13 +271,13 @@ LocalVector<Post> BackEndService::ReadUserTimeline(
 // ReadHomeTimeline: Retrieves posts from the home timeline, which includes
 // followed users' posts.
 LocalVector<Post> BackEndService::ReadHomeTimeline(
-    int64_t user_id, int start, int stop, Beehive::DereferenceScope &scope,
+    int64_t user_id, int start, int stop, FarLib::DereferenceScope &scope,
     ReadHomeTimelineReq *req) {
     if (stop <= start || start < 0) {
         return LocalVector<Post>();
     }
 
-    Beehive::async::GenericStreamRunner<512> runner(scope);
+    FarLib::async::GenericStreamRunner<512> runner(scope);
 
     states_.userid_to_hometimeline_map.get(
         user_id,
@@ -299,7 +299,7 @@ LocalVector<Post> BackEndService::ReadHomeTimeline(
 // RemovePosts: Deletes posts from the user's timeline and the timelines of
 // followers and mentions.
 void BackEndService::RemovePosts(int64_t user_id, int start, int stop,
-                                 Beehive::DereferenceScope &scope) {
+                                 FarLib::DereferenceScope &scope) {
     ReadUserTimelineReq req;
     auto posts = std::move(ReadUserTimeline(user_id, start, stop, scope));
     auto followers = std::move(GetFollowers(user_id, scope));
@@ -342,7 +342,7 @@ void BackEndService::RemovePosts(int64_t user_id, int start, int stop,
 void BackEndService::WriteHomeTimeline(
     int64_t post_id, int64_t user_id, int64_t timestamp,
     const LocalVector<int64_t> &user_mentions_id,
-    Beehive::DereferenceScope &scope) {
+    FarLib::DereferenceScope &scope) {
     auto follower_ids = GetFollowers(user_id, scope);
     // printf("%p get follower\n", fibre_self());
     for (auto id : user_mentions_id) {
@@ -371,8 +371,8 @@ void BackEndService::WriteHomeTimeline(
 // Follow: Allows a user to follow another user, updating the followee's and
 // follower's lists accordingly.
 void BackEndService::Follow(int64_t user_id, int64_t followee_id,
-                            Beehive::DereferenceScope &scope, FollowReq *req) {
-    Beehive::async::GenericStreamRunner<512> runner(scope);
+                            FarLib::DereferenceScope &scope, FollowReq *req) {
+    FarLib::async::GenericStreamRunner<512> runner(scope);
     states_.userid_to_followees_map.insert_or_update(
         user_id,
         [&](FarSmallVector<int64_t> *ptr) {
@@ -393,8 +393,8 @@ void BackEndService::Follow(int64_t user_id, int64_t followee_id,
 }
 
 LocalVector<int64_t> BackEndService::GetFollowers(
-    int64_t user_id, Beehive::DereferenceScope &scope) {
-    Beehive::async::GenericStreamRunner<sizeof(
+    int64_t user_id, FarLib::DereferenceScope &scope) {
+    FarLib::async::GenericStreamRunner<sizeof(
         OrderedVector<int64_t>::GetAllContext<false, GetFollowsCont>)>
         runner(scope);
     LocalVector<int64_t> ans;
@@ -416,8 +416,8 @@ LocalVector<int64_t> BackEndService::GetFollowers(
 }
 
 LocalVector<int64_t> BackEndService::GetFollowees(
-    int64_t user_id, Beehive::DereferenceScope &scope) {
-    Beehive::async::GenericStreamRunner<sizeof(
+    int64_t user_id, FarLib::DereferenceScope &scope) {
+    FarLib::async::GenericStreamRunner<sizeof(
         OrderedVector<int64_t>::GetAllContext<false, GetFollowsCont>)>
         runner(scope);
     LocalVector<int64_t> ans;
@@ -443,7 +443,7 @@ void BackEndService::RegisterUserWithId(std::string_view first_name,
                                         std::string_view username,
                                         std::string_view password,
                                         int64_t user_id,
-                                        Beehive::DereferenceScope &scope) {
+                                        FarLib::DereferenceScope &scope) {
     UserProfile user_profile;
     user_profile.first_name = first_name;
     user_profile.last_name = last_name;
@@ -452,7 +452,7 @@ void BackEndService::RegisterUserWithId(std::string_view first_name,
     user_profile.salt = salt;
     user_profile.password_hashed =
         picosha2::hash256_hex_string(std::string(password) + salt);
-    Beehive::async::GenericStreamRunner<
+    FarLib::async::GenericStreamRunner<
         sizeof(ConcurrentHashMap<FixedSizeString<UserNameLen>,
                                  UserProfile>::PutContext<BoolCont>),
         true>
@@ -478,7 +478,7 @@ void BackEndService::RegisterUser(std::string_view first_name,
                                   std::string_view last_name,
                                   std::string_view username,
                                   std::string_view password,
-                                  Beehive::DereferenceScope &scope) {
+                                  FarLib::DereferenceScope &scope) {
     auto user_id = (GenUniqueId() << 16);
     RegisterUserWithId(first_name, last_name, username, password, user_id,
                        scope);
@@ -488,12 +488,12 @@ void BackEndService::RegisterUser(std::string_view first_name,
 // Handles user login by checking provided credentials against stored profiles.
 std::variant<LoginErrorCode, std::string> BackEndService::Login(
     std::string_view username, std::string_view password,
-    Beehive::DereferenceScope &scope) {
+    FarLib::DereferenceScope &scope) {
     std::string signature;
     UserProfile userprofile;
     bool found;
     FixedSizeString<UserNameLen> username_temp = username;
-    Beehive::async::GenericStreamRunner<sizeof(
+    FarLib::async::GenericStreamRunner<sizeof(
         ConcurrentHashMap<FixedSizeString<UserNameLen>,
                           UserProfile>::GetContext<false, LoginCont<false>>)>
         runner(scope);
@@ -522,7 +522,7 @@ std::variant<LoginErrorCode, std::string> BackEndService::Login(
 
 // never used
 LocalVector<Post> BackEndService::ReadPosts(
-    const LocalVector<int64_t> &post_ids, Beehive::DereferenceScope &scope) {
+    const LocalVector<int64_t> &post_ids, FarLib::DereferenceScope &scope) {
     LocalVector<Post> posts;
     for (auto post_id : post_ids) {
         Post post;
@@ -537,7 +537,7 @@ LocalVector<Post> BackEndService::ReadPosts(
 // never userd
 void BackEndService::FollowWithUsername(std::string_view user_name,
                                         std::string_view followee_name,
-                                        Beehive::DereferenceScope &scope) {
+                                        FarLib::DereferenceScope &scope) {
     std::cout << "never used" << std::endl;
     auto user_id = GetUserId(user_name, scope);
     auto followee_id = GetUserId(followee_name, scope);
@@ -549,7 +549,7 @@ void BackEndService::FollowWithUsername(std::string_view user_name,
 // never userd
 void BackEndService::UnfollowWithUsername(std::string_view user_name,
                                           std::string_view followee_name,
-                                          Beehive::DereferenceScope &scope) {
+                                          FarLib::DereferenceScope &scope) {
     std::cout << "never used" << std::endl;
     auto user_id = GetUserId(user_name, scope);
     auto followee_id = GetUserId(followee_name, scope);
@@ -560,7 +560,7 @@ void BackEndService::UnfollowWithUsername(std::string_view user_name,
 
 // never userd
 std::optional<int64_t> BackEndService::GetUserId(
-    std::string_view username, Beehive::DereferenceScope &scope) {
+    std::string_view username, FarLib::DereferenceScope &scope) {
     std::cout << "never used" << std::endl;
     UserProfile userprofile;
     states_.username_to_userprofile_map.get(username, &userprofile, scope);
@@ -570,14 +570,14 @@ std::optional<int64_t> BackEndService::GetUserId(
 // never userd
 void BackEndService::UploadMedia(std::string_view filename,
                                  std::string_view data,
-                                 Beehive::DereferenceScope &scope) {
+                                 FarLib::DereferenceScope &scope) {
     std::cout << "never used" << std::endl;
     states_.filename_to_data_map.put(filename, data, scope);
 }
 
 // never userd
 FixedSizeString<DataLen> BackEndService::GetMedia(
-    std::string_view filename, Beehive::DereferenceScope &scope) {
+    std::string_view filename, FarLib::DereferenceScope &scope) {
     std::cout << "never used" << std::endl;
     FixedSizeString<DataLen> filedata;
     bool found = states_.filename_to_data_map.get(filename, &filedata, scope);
@@ -591,7 +591,7 @@ FixedSizeString<DataLen> BackEndService::GetMedia(
 // Unfollow: Allows a user to unfollow another user, updating the lists
 // accordingly.
 void BackEndService::Unfollow(int64_t user_id, int64_t followee_id,
-                              Beehive::DereferenceScope &scope) {
+                              FarLib::DereferenceScope &scope) {
     std::cout << "never used" << std::endl;
 
     states_.userid_to_followees_map.insert_or_update(
