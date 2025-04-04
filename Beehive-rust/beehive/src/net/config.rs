@@ -3,13 +3,13 @@ use serde::Deserialize;
 use std::fs::File;
 use std::io::Read;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct ServerConfig {
     pub addr: String,
     pub memory_size: usize,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub cq_entries: i32,
     pub qp_send_cap: u32,
@@ -58,7 +58,16 @@ impl Config {
         }
     }
     pub fn load_config(path: &str) -> Config {
-        let mut file = File::open(path).unwrap();
+        let mut file = match File::open(path) {
+            Ok(f) => f,
+            Err(_) => {
+                panic!(
+                    "load config error at path: {}/{}",
+                    std::env::current_dir().unwrap().to_str().unwrap(),
+                    path
+                );
+            }
+        };
         let mut contents: String = String::new();
         let _ = file.read_to_string(&mut contents);
         // convert to BeehiveConfig Type, defined in beehive::net::config.

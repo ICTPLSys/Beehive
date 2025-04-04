@@ -1,5 +1,4 @@
 use super::papi::*;
-use crate::thread::meta::*;
 
 static RESULT_PER_TH: bool = false;
 pub const CPU_FREQ_MHZ: u64 = 2794;
@@ -42,7 +41,7 @@ where
     let mut event_sets: Vec<i32> = vec![];
     unsafe {
         for i in 0..worker_num {
-            let tid = THREAD_TIDS[i];
+            let tid = libfibre_port::cfibre_thread_tid(i);
             let mut papi_event_set = PAPI_NULL;
             let papi_event_set_rawptr = &mut papi_event_set as *mut i32;
             let papi_events_rawptr = &mut papi_events as *mut i32;
@@ -95,47 +94,4 @@ pub fn perf_init() {
     unsafe {
         debug_assert_eq!(PAPI_library_init(RS_PAPI_VER_CURRENT), RS_PAPI_VER_CURRENT);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::thread::meta::*;
-    use tokio::runtime;
-
-    use crate::{
-        profile::hardware_profiler::{perf_init, perf_profile},
-        thread::meta::{fork_join, init_thread_id},
-    };
-    #[test]
-    fn hardware_profiler_test() {
-        const NUM_THREADS: u64 = 16;
-        const NUM_LOOP_COUNT: u64 = 1024;
-        const VEC_SIZE: usize = 1 << 16;
-        perf_init();
-        let rt = runtime::Builder::new_multi_thread()
-            .worker_threads(NUM_THREADS as usize)
-            .enable_all()
-            .on_thread_start(|| {
-                init_thread_id();
-                log::info!(
-                    "tokio runtime worker thread start: id = {}",
-                    get_thread_idx()
-                );
-            })
-            .build()
-            .unwrap();
-        perf_profile(NUM_THREADS as usize, || {
-            fork_join(&rt, NUM_THREADS * NUM_LOOP_COUNT, async || {
-                let mut v = vec![];
-                let mut sum: usize = 0;
-                for i in 0..VEC_SIZE {
-                    v.push(i);
-                    sum += i;
-                }
-                assert_eq!(sum, v.iter().sum::<usize>());
-            });
-        })
-        .print_all();
-    }
-    // TODO check if the hardware counter result is reasonable
 }

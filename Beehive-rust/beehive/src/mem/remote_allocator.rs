@@ -1,10 +1,13 @@
 use crate::mem::allocator_utils::*;
+use crate::net::Config;
 use crate::utils::bitfield::*;
+use crate::utils::pointer::*;
+use crate::utils::spinlock::SpinPollingLock;
 use once_cell::sync::Lazy;
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{array, intrinsics::unlikely, ptr::NonNull};
+use std::{array, intrinsics::unlikely};
 
 static mut REMOTE_GLOBAL_HEAP: Lazy<RemoteGlobalHeap> = Lazy::new(|| RemoteGlobalHeap::new());
 
@@ -13,7 +16,7 @@ static mut REMOTE_THREAD_HEAP: Lazy<RemoteThreadHeap> = Lazy::new(|| RemoteThrea
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]
-pub(super) struct RemoteAddr(u64);
+pub struct RemoteAddr(u64);
 
 impl RemoteAddr {
     const OFFSET_BIT_COUNT: usize = 40; // 1TB for each server
@@ -27,12 +30,22 @@ impl RemoteAddr {
         }
     }
 
+    pub fn null() -> Self {
+        Self::new_from_addr(0)
+    }
+
     pub fn addr(&self) -> u64 {
         self.offset() | (self.server_id() << RemoteAddr::OFFSET_BIT_COUNT)
     }
 
     pub fn new_from_addr(addr: u64) -> Self {
         Self { 0: addr }
+    }
+}
+
+impl From<RemoteAddr> for u64 {
+    fn from(raddr: RemoteAddr) -> Self {
+        raddr.0
     }
 }
 
@@ -79,8 +92,8 @@ impl SubAssign<u64> for RemoteAddr {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct DoubleLinkedListHead {
-    next: Option<NonNull<DoubleLinkedListHead>>,
-    prev: Option<NonNull<DoubleLinkedListHead>>,
+    next: Option<SendNonNull<DoubleLinkedListHead>>,
+    prev: Option<SendNonNull<DoubleLinkedListHead>>,
 }
 
 unsafe impl Sync for DoubleLinkedListHead {}
@@ -94,13 +107,13 @@ impl DoubleLinkedListHead {
         }
     }
 
-    pub unsafe fn insert_front_unsafe(&mut self, mut node: NonNull<DoubleLinkedListHead>) {
+    pub unsafe fn insert_front_unsafe(&mut self, mut node: SendNonNull<DoubleLinkedListHead>) {
         unsafe {
             debug_assert!(node.as_ref().next.is_none());
             debug_assert!(node.as_ref().prev.is_none());
-            node.as_mut().next = Some(NonNull::new_unchecked(self));
+            node.as_mut().next = Some(SendNonNull::new_unchecked(self));
             if let Some(mut prev) = self.prev {
-                node.as_mut().prev = Some(NonNull::new_unchecked(prev.as_ptr()));
+                node.as_mut().prev = Some(SendNonNull::new_unchecked(prev.as_ptr()));
                 prev.as_mut().next = Some(node);
             } else {
                 node.as_mut().prev = None;
@@ -109,13 +122,13 @@ impl DoubleLinkedListHead {
         self.prev = Some(node);
     }
 
-    pub unsafe fn insert_back_unsafe(&mut self, mut node: NonNull<DoubleLinkedListHead>) {
+    pub unsafe fn insert_back_unsafe(&mut self, mut node: SendNonNull<DoubleLinkedListHead>) {
         unsafe {
             debug_assert!(node.as_ref().next.is_none());
             debug_assert!(node.as_ref().prev.is_none());
-            node.as_mut().prev = Some(NonNull::new_unchecked(self));
+            node.as_mut().prev = Some(SendNonNull::new_unchecked(self));
             if let Some(mut next) = self.next {
-                node.as_mut().next = Some(NonNull::new_unchecked(next.as_ptr()));
+                node.as_mut().next = Some(SendNonNull::new_unchecked(next.as_ptr()));
                 next.as_mut().prev = Some(node);
             } else {
                 node.as_mut().next = None;
@@ -144,7 +157,7 @@ impl DoubleLinkedListHead {
 #[repr(C)]
 struct RemoteRegionHead {
     header: DoubleLinkedListHead, // Must at the head
-    lock: SpinLock,
+    lock: SpinPollingLock,
     bin: u32,
     last_map_idx: u32,
     block_bitmap: Vec<u64>,
@@ -159,8 +172,6 @@ unsafe impl Send for RemoteRegionHead {}
 impl RemoteRegionHead {
     const MAP_ELEMENT_BIT_COUNT: usize = std::mem::size_of::<u64>() * 8;
     const FREE_BIT_MAP: u64 = u64::MAX;
-    const FREE_BIT_MAP_32: u32 = u32::MAX;
-    const FULL_BIT_MAP: u64 = 0;
 
     pub fn lock(&mut self) {
         self.lock.lock();
@@ -173,7 +184,7 @@ impl RemoteRegionHead {
     pub fn new() -> Self {
         RemoteRegionHead {
             header: DoubleLinkedListHead::new(),
-            lock: SpinLock::new(),
+            lock: SpinPollingLock::new(),
             bin: 0,
             last_map_idx: 0,
             block_bitmap: vec![],
@@ -185,7 +196,7 @@ impl RemoteRegionHead {
 
     pub fn init(&mut self, server_id: u64, base_addr: u64, bin: u32) {
         self.header = DoubleLinkedListHead::new();
-        self.lock = SpinLock::new();
+        self.lock = SpinPollingLock::new();
         self.base_addr = RemoteAddr::new(base_addr, server_id);
         self.reset::<true>(bin);
     }
@@ -198,31 +209,29 @@ impl RemoteRegionHead {
         (INIT || self.bin != bin).then(|| {
             self.block_bitmap = vec![Self::FREE_BIT_MAP; map_size];
         });
+        // specially handle last bitmap
+        if self.entry_size % Self::MAP_ELEMENT_BIT_COUNT != 0 {
+            let last_bitmap = self.block_bitmap.last_mut().unwrap();
+            *last_bitmap = (1u64 << (self.entry_size % Self::MAP_ELEMENT_BIT_COUNT)) - 1;
+        }
         self.last_map_idx = 0;
         self.used_count = 0;
         self.bin = bin;
     }
 
     pub fn allocate_unsafe(&mut self) -> Option<RemoteAddr> {
-        let ffsl = |num: u64| {
-            if num == 0 {
-                0
-            } else {
-                num.trailing_zeros() + 1
-            }
-        };
         let map_size: usize =
             (self.entry_size + Self::MAP_ELEMENT_BIT_COUNT - 1) / Self::MAP_ELEMENT_BIT_COUNT;
         let mut addr = None;
         for _ in 0..map_size {
-            let bit = ffsl(self.block_bitmap[self.last_map_idx as usize]);
-            if bit != 0 {
-                self.block_bitmap[self.last_map_idx as usize] ^= 1 << (bit - 1);
+            let bit = self.block_bitmap[self.last_map_idx as usize].trailing_zeros();
+            if bit != 64 {
+                self.block_bitmap[self.last_map_idx as usize] ^= 1 << bit;
                 self.used_count += 1;
                 addr = Some(
                     self.base_addr
                         + ((Self::MAP_ELEMENT_BIT_COUNT * self.last_map_idx as usize
-                            + (bit - 1) as usize)
+                            + bit as usize)
                             * bin_size(self.bin as usize)) as u64,
                 );
                 break;
@@ -292,7 +301,7 @@ impl RemoteRegionHead {
 
 #[derive(Debug)]
 struct RemoteRegionList {
-    lock: SpinLock,
+    lock: SpinPollingLock,
     dummy_head: DoubleLinkedListHead,
     dummy_tail: DoubleLinkedListHead,
 }
@@ -311,7 +320,7 @@ impl RemoteRegionList {
 
     pub fn new() -> Self {
         RemoteRegionList {
-            lock: SpinLock::new(),
+            lock: SpinPollingLock::new(),
             dummy_head: DoubleLinkedListHead::new(),
             dummy_tail: DoubleLinkedListHead::new(),
         }
@@ -322,12 +331,12 @@ impl RemoteRegionList {
         // for this will be moved during construction
         // TODO maybe we can fix it, make it not ugly
         unsafe {
-            self.dummy_head.next = Some(NonNull::new_unchecked(&mut self.dummy_tail));
-            self.dummy_tail.prev = Some(NonNull::new_unchecked(&mut self.dummy_head));
+            self.dummy_head.next = Some(SendNonNull::new_unchecked(&mut self.dummy_tail));
+            self.dummy_tail.prev = Some(SendNonNull::new_unchecked(&mut self.dummy_head));
         }
     }
 
-    pub fn insert_tail(&mut self, node: NonNull<RemoteRegionHead>) {
+    pub fn insert_tail(&mut self, node: SendNonNull<RemoteRegionHead>) {
         self.lock();
         unsafe {
             debug_assert!(node.as_ref().is_in_thread_heap_unsafe());
@@ -336,7 +345,7 @@ impl RemoteRegionList {
         self.unlock();
     }
 
-    pub fn insert_head(&mut self, node: NonNull<RemoteRegionHead>) {
+    pub fn insert_head(&mut self, node: SendNonNull<RemoteRegionHead>) {
         self.lock();
         unsafe {
             self.dummy_head.insert_back_unsafe(node.cast());
@@ -361,7 +370,7 @@ impl RemoteRegionList {
         is_head_next_to_tail
     }
 
-    pub fn pop_head(&mut self) -> Option<NonNull<RemoteRegionHead>> {
+    pub fn pop_head(&mut self) -> Option<SendNonNull<RemoteRegionHead>> {
         self.lock();
         if self.empty() {
             self.unlock();
@@ -378,7 +387,7 @@ impl RemoteRegionList {
         }
     }
 
-    pub fn pop_tail(&mut self) -> Option<NonNull<RemoteRegionHead>> {
+    pub fn pop_tail(&mut self) -> Option<SendNonNull<RemoteRegionHead>> {
         self.lock();
         if self.empty() {
             self.unlock();
@@ -395,7 +404,7 @@ impl RemoteRegionList {
         }
     }
 
-    pub unsafe fn remove_from_list(&mut self, mut region: NonNull<RemoteRegionHead>) {
+    pub unsafe fn remove_from_list(&mut self, mut region: SendNonNull<RemoteRegionHead>) {
         self.lock();
         unsafe {
             region.as_mut().header.remove_self_unsafe();
@@ -425,7 +434,7 @@ impl RemoteServerRegionHeap {
         }
     }
 
-    pub fn allocate_region_init(&mut self, bin: usize) -> Option<NonNull<RemoteRegionHead>> {
+    pub fn allocate_region_init(&mut self, bin: usize) -> Option<SendNonNull<RemoteRegionHead>> {
         let mut idx = self.used_heap_idx.load(Ordering::Relaxed);
         loop {
             if idx < self.regions_size {
@@ -443,7 +452,7 @@ impl RemoteServerRegionHeap {
                             bin as u32,
                         );
                         unsafe {
-                            let region = Some(NonNull::new_unchecked(&mut self.regions[idx]));
+                            let region = Some(SendNonNull::new_unchecked(&mut self.regions[idx]));
                             debug_assert!(region.unwrap().as_ref().is_in_thread_heap_unsafe());
                             return region;
                         }
@@ -456,13 +465,15 @@ impl RemoteServerRegionHeap {
         }
     }
 
-    pub fn addr_to_region(&mut self, raddr: RemoteAddr) -> NonNull<RemoteRegionHead> {
+    pub fn addr_to_region(&mut self, raddr: RemoteAddr) -> SendNonNull<RemoteRegionHead> {
         debug_assert!(raddr.server_id() == self.server_id);
-        unsafe { NonNull::new_unchecked(&mut self.regions[raddr.offset() as usize / REGION_SIZE]) }
+        unsafe {
+            SendNonNull::new_unchecked(&mut self.regions[raddr.offset() as usize / REGION_SIZE])
+        }
     }
 }
 #[derive(Debug)]
-struct RemoteGlobalHeap {
+pub(crate) struct RemoteGlobalHeap {
     usable_region_list: [RemoteRegionList; REGION_BIN_COUNT],
     full_region_list: RemoteRegionList,
     free_region_list: RemoteRegionList,
@@ -473,7 +484,7 @@ unsafe impl Sync for RemoteGlobalHeap {}
 unsafe impl Send for RemoteGlobalHeap {}
 
 impl RemoteGlobalHeap {
-    fn addr_to_region(&mut self, raddr: RemoteAddr) -> NonNull<RemoteRegionHead> {
+    fn addr_to_region(&mut self, raddr: RemoteAddr) -> SendNonNull<RemoteRegionHead> {
         self.server_heaps[raddr.server_id() as usize].addr_to_region(raddr)
     }
 
@@ -532,7 +543,7 @@ impl RemoteGlobalHeap {
         self.server_heaps.clear();
     }
 
-    pub fn allocate_region(&mut self, bin: usize) -> Option<NonNull<RemoteRegionHead>> {
+    fn allocate_region(&mut self, bin: usize) -> Option<SendNonNull<RemoteRegionHead>> {
         if let Some(region) = self.usable_region_list[bin].pop_head() {
             unsafe {
                 debug_assert!(region.as_ref().is_in_thread_heap_unsafe());
@@ -554,7 +565,7 @@ impl RemoteGlobalHeap {
         None
     }
 
-    pub fn return_back_region(&mut self, mut region: NonNull<RemoteRegionHead>) {
+    fn return_back_region(&mut self, mut region: SendNonNull<RemoteRegionHead>) {
         unsafe {
             region.as_mut().lock();
         }
@@ -564,7 +575,7 @@ impl RemoteGlobalHeap {
         }
     }
 
-    pub fn return_back_region_unsafe(&mut self, region: NonNull<RemoteRegionHead>) {
+    fn return_back_region_unsafe(&mut self, region: SendNonNull<RemoteRegionHead>) {
         unsafe {
             debug_assert!(region.as_ref().is_in_thread_heap_unsafe());
             if region.as_ref().is_full_unsafe() {
@@ -587,7 +598,7 @@ impl RemoteGlobalHeap {
         }
     }
 
-    pub fn deallocate_unsafe(&mut self, raddr: RemoteAddr, mut region: NonNull<RemoteRegionHead>) {
+    fn deallocate_unsafe(&mut self, raddr: RemoteAddr, mut region: SendNonNull<RemoteRegionHead>) {
         unsafe {
             region.as_mut().deallocate_unsafe(raddr);
             (!region.as_ref().is_in_thread_heap_unsafe()).then(|| {
@@ -611,7 +622,7 @@ impl Drop for RemoteGlobalHeap {
 }
 
 struct RemoteThreadHeap {
-    regions: [Option<NonNull<RemoteRegionHead>>; REGION_BIN_COUNT],
+    regions: [Option<SendNonNull<RemoteRegionHead>>; REGION_BIN_COUNT],
 }
 
 #[allow(static_mut_refs)]
@@ -678,21 +689,23 @@ impl Drop for RemoteThreadHeap {
 }
 
 #[allow(static_mut_refs)]
-pub(super) fn allocate(size: usize) -> Option<RemoteAddr> {
+pub(super) fn allocate_remote(size: usize) -> Option<RemoteAddr> {
     unsafe { REMOTE_THREAD_HEAP.allocate(size) }
 }
 
 #[allow(static_mut_refs)]
-pub(super) fn deallocate(raddr: RemoteAddr) {
+pub(super) fn deallocate_remote(raddr: RemoteAddr) {
     unsafe {
         REMOTE_THREAD_HEAP.deallocate(raddr);
     }
 }
 
 #[allow(static_mut_refs)]
-pub(super) fn init_remote_heap(server_num: usize, buffer_size: usize) {
+pub(super) fn init_remote_heap(config: &Config) {
+    let server_configs = &config.servers;
+    let server_memory_sizes = server_configs.iter().map(|cfg| cfg.memory_size).collect();
     unsafe {
-        REMOTE_GLOBAL_HEAP.register_remote(server_num, buffer_size);
+        REMOTE_GLOBAL_HEAP.register_remote_vec(server_memory_sizes);
     }
 }
 
@@ -713,10 +726,12 @@ mod tests {
         const REMOTE_BUF_SIZE: usize = 1 << 30;
         const ALLOC_SIZE: usize = 1 << 10; // 1K
         const SERVER_NUM: usize = 1;
-        init_remote_heap(SERVER_NUM, REMOTE_BUF_SIZE);
+        unsafe {
+            REMOTE_GLOBAL_HEAP.register_remote(SERVER_NUM, REMOTE_BUF_SIZE);
+        }
         let mut addrs = vec![];
         for _ in 0..REMOTE_BUF_SIZE / ALLOC_SIZE {
-            match allocate(ALLOC_SIZE) {
+            match allocate_remote(ALLOC_SIZE) {
                 Some(addr) => addrs.push(addr),
                 _ => break,
             }
@@ -734,12 +749,12 @@ mod tests {
                 && addrs.last().unwrap().offset() + ALLOC_SIZE as u64 <= REMOTE_BUF_SIZE as u64
         );
         for addr in addrs.iter() {
-            deallocate(*addr);
+            deallocate_remote(*addr);
         }
         // alloc again
         addrs.clear();
         for _ in 0..REMOTE_BUF_SIZE / ALLOC_SIZE {
-            match allocate(ALLOC_SIZE) {
+            match allocate_remote(ALLOC_SIZE) {
                 Some(addr) => addrs.push(addr),
                 _ => break,
             }
@@ -767,7 +782,7 @@ mod tests {
             threads.push(thread::spawn(move || {
                 let mut addrs = vec![];
                 for _ in 0..REMOTE_BUF_SIZE / ALLOC_SIZE {
-                    match allocate(ALLOC_SIZE) {
+                    match allocate_remote(ALLOC_SIZE) {
                         Some(addr) => addrs.push(addr),
                         _ => break,
                     }
@@ -796,7 +811,7 @@ mod tests {
                 && gaddrs.last().unwrap().offset() + ALLOC_SIZE as u64 <= REMOTE_BUF_SIZE as u64
         );
         for raddr in gaddrs.iter() {
-            deallocate(*raddr);
+            deallocate_remote(*raddr);
         }
         unsafe {
             REMOTE_GLOBAL_HEAP.deregister_remote();
@@ -820,7 +835,7 @@ mod tests {
             threads.push(thread::spawn(move || {
                 let mut addrs = vec![];
                 for _ in 0..REMOTE_BUF_SIZE / ALLOC_SIZE {
-                    match allocate(ALLOC_SIZE) {
+                    match allocate_remote(ALLOC_SIZE) {
                         Some(addr) => addrs.push(addr),
                         _ => break,
                     }
@@ -848,7 +863,7 @@ mod tests {
         }
         assert!(gaddrs.last().unwrap().offset() + ALLOC_SIZE as u64 <= REMOTE_BUF_SIZE as u64);
         for raddr in gaddrs.iter() {
-            deallocate(*raddr);
+            deallocate_remote(*raddr);
         }
         unsafe {
             REMOTE_GLOBAL_HEAP.deregister_remote();

@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+beehive_helper = { path = "../beehive_helper"}
 nix = { version = "0.29", features = ["mman"] }
-tokio = { version = "1.42.0", features = ["full"] }
 log = { version = "0.4", features = [
     "max_level_debug",
     "release_max_level_warn",
@@ -21,6 +21,9 @@ serial_test = "3.2.0"
 static_assertions = "1.1.0"
 paste = "1.0.15"
 futures = "0.3"
+sync-ptr = "0.1.1"
+libfibre_port = { path = "../libfibre_port" }
+
 [build-dependencies]
 bindgen = "0.71.0"
 cc = "1.0"

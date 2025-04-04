@@ -1,4 +1,6 @@
 [workspace]
 
 resolver = "2"
-members = ["beehive"]
+members = ["beehive", "libfibre_port", "beehive_helper"]
+[profile.dev]
+debug = true

@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 pub(super) const REGION_SIZE: usize = 256 * 1024;
 pub(super) const REGION_BIN_COUNT: usize = 48;
 const BIN_SIZE: [usize; REGION_BIN_COUNT] = [
@@ -43,42 +41,10 @@ pub(super) fn bin_from_wsize(wsize: usize) -> usize {
     }
 }
 
+#[derive(Debug)]
 pub(super) enum RegionState {
     Free,
     InUse,
     Usable,
     Full,
-}
-#[derive(Debug)]
-pub(super) struct SpinLock {
-    lock: AtomicBool,
-}
-
-impl SpinLock {
-    pub fn new() -> Self {
-        SpinLock {
-            lock: AtomicBool::new(false),
-        }
-    }
-
-    pub fn lock(&mut self) {
-        loop {
-            if self
-                .lock
-                .compare_exchange_weak(false, true, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-            {
-                break;
-            }
-        }
-    }
-
-    pub fn unlock(&mut self) {
-        debug_assert!(self.is_locked());
-        self.lock.store(false, Ordering::Relaxed);
-    }
-
-    pub fn is_locked(&self) -> bool {
-        self.lock.load(Ordering::Relaxed)
-    }
 }

@@ -4,6 +4,7 @@ use super::config::Config;
 use super::ibverbs::*;
 use serde::{Deserialize, Serialize};
 
+pub(crate) const RQ_STOP: u64 = 0;
 #[derive(Serialize, Deserialize)]
 pub struct ClientInfo {
     pub server_memory_size: usize,
@@ -130,7 +131,7 @@ pub unsafe fn modify_qp_rts(qp: *mut ibv_qp, psn: u32, config: &Config) {
 }
 
 #[inline(always)]
-unsafe fn post_send(
+pub(crate) unsafe fn post_send(
     opcode: ibv_wr_opcode,
     send_flags: ibv_send_flags,
     qp: *mut ibv_qp,
@@ -174,7 +175,7 @@ unsafe fn post_send(
 }
 
 #[inline(always)]
-pub unsafe fn post_read_signal(
+pub(crate) unsafe fn post_read_signal(
     qp: *mut ibv_qp,
     lkey: u32,
     rkey: u32,
@@ -235,16 +236,19 @@ pub unsafe fn ibv_poll_cq(cq: *mut ibv_cq, num_entries: i32, wc: *mut ibv_wc) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test() {
-        println!("Hello");
+        pretty_env_logger::init();
+        log::info!("Hello");
 
         unsafe {
             let mut num_devices: i32 = 0;
             let devices = ibv_get_device_list(&mut num_devices);
             ibv_free_device_list(devices);
-            println!("num_devices: {}", num_devices);
+            log::info!("num_devices: {}", num_devices);
         }
     }
 }

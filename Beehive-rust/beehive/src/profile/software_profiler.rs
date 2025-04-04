@@ -1,19 +1,14 @@
 use super::hardware_profiler::{CPU_FREQ_MHZ, get_cycles};
-use crate::thread::meta::*;
-use once_cell::sync::Lazy;
 use std::fmt::Display;
 use std::mem;
 use std::ops::AddAssign;
 
-use crate::thread::meta::MAX_THREAD_COUNT;
-
-pub static mut THREAD_PROFILE_DATA: Lazy<[ProfileData; MAX_THREAD_COUNT]> =
-    Lazy::new(|| [ProfileData::new(); MAX_THREAD_COUNT]);
+pub static mut THREAD_PROFILE_DATA: Vec<ProfileData> = vec![];
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u64)]
 #[allow(dead_code)]
-enum ProfileTimeItem {
+pub enum ProfileTimeItem {
     Foo1 = 0,
     Foo2, // TODO add real profile item
 }
@@ -21,7 +16,7 @@ enum ProfileTimeItem {
 #[derive(Debug, Clone, Copy)]
 #[repr(u64)]
 #[allow(dead_code)]
-enum ProfileCountItem {
+pub enum ProfileCountItem {
     Foo1 = 0,
 }
 
@@ -74,6 +69,14 @@ impl ProfileData {
             cd.reset();
         }
     }
+
+    pub fn time_datas(&self) -> &[TimerCounterRecord] {
+        &self.time_datas
+    }
+
+    pub fn count_datas(&self) -> &[CounterCounterRecord] {
+        &self.count_datas
+    }
 }
 
 impl AddAssign<&Self> for ProfileData {
@@ -102,7 +105,7 @@ impl Display for ProfileData {
     }
 }
 #[derive(Debug, Clone)]
-struct Timer {
+pub struct Timer {
     start: u64,
     end: u64,
     profile_item: ProfileTimeItem,
@@ -112,8 +115,8 @@ impl Drop for Timer {
     fn drop(&mut self) {
         self.end = get_cycles();
         unsafe {
-            THREAD_PROFILE_DATA[get_thread_idx() as usize].time_datas
-                [self.profile_item as usize] += self as &Self;
+            let id = libfibre_port::cfibre_thread_idx();
+            THREAD_PROFILE_DATA[id].time_datas[self.profile_item as usize] += self as &Self;
         }
     }
 }
@@ -130,7 +133,7 @@ impl Timer {
 }
 
 #[derive(Debug, Clone)]
-struct Counter {
+pub struct Counter {
     count: u64,
     profile_item: ProfileCountItem,
 }
@@ -144,8 +147,8 @@ impl AddAssign<&Self> for Counter {
 impl Drop for Counter {
     fn drop(&mut self) {
         unsafe {
-            THREAD_PROFILE_DATA[get_thread_idx() as usize].count_datas
-                [self.profile_item as usize] += self as &Self;
+            let id = libfibre_port::cfibre_thread_idx();
+            THREAD_PROFILE_DATA[id].count_datas[self.profile_item as usize] += self as &Self;
         }
     }
 }
@@ -168,7 +171,7 @@ impl Counter {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TimerCounterRecord {
+pub struct TimerCounterRecord {
     name: &'static str,
     time: u64,
     count: u64,
@@ -190,6 +193,22 @@ impl TimerCounterRecord {
         self.count = 0;
         self.step = 1;
     }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn time(&self) -> u64 {
+        self.time
+    }
+
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
+    pub fn step(&self) -> u64 {
+        self.step
+    }
 }
 
 impl AddAssign<&Timer> for TimerCounterRecord {
@@ -201,22 +220,26 @@ impl AddAssign<&Timer> for TimerCounterRecord {
 
 impl Display for TimerCounterRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "Timer Record {}
-            time: {}us
-            count: {}
-            avg: {}us",
-            self.name,
-            self.time / CPU_FREQ_MHZ,
-            self.count,
-            self.time / CPU_FREQ_MHZ / self.count
-        )
+        if self.count != 0 {
+            write!(
+                f,
+                "Timer Record {}
+                time: {}us
+                count: {}
+                avg: {}us",
+                self.name,
+                self.time / CPU_FREQ_MHZ,
+                self.count,
+                self.time / CPU_FREQ_MHZ / self.count
+            )
+        } else {
+            write!(f, "Timer Record record nothing!")
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CounterCounterRecord {
+pub struct CounterCounterRecord {
     name: &'static str,
     counter: u64,
     count: u64,
@@ -238,8 +261,23 @@ impl CounterCounterRecord {
         self.count = 1;
         self.step = 1;
     }
-}
 
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
+    pub fn step(&self) -> u64 {
+        self.step
+    }
+
+    pub fn counter(&self) -> u64 {
+        self.counter
+    }
+}
 impl AddAssign<&Counter> for CounterCounterRecord {
     fn add_assign(&mut self, rhs: &Counter) {
         self.counter += rhs.count;
@@ -293,6 +331,7 @@ pub fn collect_profile_data(worker_num: usize) -> ProfileData {
 
 pub fn reset_profile_data(worker_num: usize) {
     unsafe {
+        THREAD_PROFILE_DATA.resize(worker_num, ProfileData::new());
         for tpd in THREAD_PROFILE_DATA[..worker_num].iter_mut() {
             tpd.reset();
         }
@@ -301,54 +340,4 @@ pub fn reset_profile_data(worker_num: usize) {
 
 pub fn init_profile_data(worker_num: usize) {
     reset_profile_data(worker_num);
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        profile::{hardware_profiler::CPU_FREQ_MHZ, software_profiler::Timer},
-        thread::meta::fork_join,
-    };
-
-    use super::*;
-    use tokio::runtime;
-    #[test]
-    fn software_profiler_test() {
-        const NUM_THREADS: u64 = 16;
-        const NUM_LOOP_COUNT: u64 = 1024;
-        const NUM_SLEEP_US: u64 = 1000;
-        const GLOBAL_COUNT: u64 = NUM_THREADS * NUM_LOOP_COUNT;
-        const GLOBAL_SLEEP_US: u64 = NUM_SLEEP_US * GLOBAL_COUNT;
-        const SLEEP_US_EPS: u64 = GLOBAL_SLEEP_US / 1000 * 2;
-        let rt = runtime::Builder::new_multi_thread()
-            .worker_threads(NUM_THREADS as usize)
-            .enable_all()
-            .on_thread_start(|| {
-                init_thread_id();
-                log::info!(
-                    "tokio runtime worker thread start: id = {}",
-                    get_thread_idx()
-                );
-            })
-            .build()
-            .unwrap();
-        init_profile_data(NUM_THREADS as usize);
-        fork_join(&rt, NUM_THREADS * NUM_LOOP_COUNT, async || {
-            let _timer: Timer = Timer::new(0.into());
-            let start = get_cycles();
-            loop {
-                if (get_cycles() - start) / CPU_FREQ_MHZ > NUM_SLEEP_US {
-                    break;
-                }
-            }
-        });
-
-        let glpd = collect_profile_data(NUM_THREADS as usize);
-        let tc = glpd.time_datas[0];
-        assert_eq!(tc.count, GLOBAL_COUNT);
-        assert!(
-            (tc.time / CPU_FREQ_MHZ as u64) < GLOBAL_SLEEP_US + SLEEP_US_EPS
-                && (tc.time / CPU_FREQ_MHZ as u64) > GLOBAL_SLEEP_US - SLEEP_US_EPS
-        );
-    }
 }

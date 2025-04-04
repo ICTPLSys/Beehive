@@ -1,9 +1,10 @@
 mod client;
 mod config;
-mod ibverbs;
 mod memory;
 mod rdma;
 mod server;
+
+pub mod ibverbs;
 
 pub use client::Client;
 pub use config::Config;

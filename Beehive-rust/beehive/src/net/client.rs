@@ -1,8 +1,10 @@
+use crate::mem::RemoteAddr;
+
 use super::config::Config;
 use super::ibverbs::*;
 use super::memory::{allocate_memory, deallocate_memory};
-use super::rdma::{self, ClientInfo, QPInfo, ServerInfo};
-use log::{error, info, warn};
+use super::rdma::{self, ClientInfo, QPInfo, ServerInfo, ibv_poll_cq};
+use log::{error, info};
 use rand::RngCore;
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
@@ -43,7 +45,7 @@ impl Client {
     }
 
     /// initialize the singleton instance
-    pub fn initialize(config: Config) {
+    pub fn initialize(config: &Config) {
         info!("initializing rdma client");
         unsafe {
             let instance_ptr = CLIENT_INSTANCE.0.get();
@@ -63,14 +65,15 @@ impl Client {
         info!("rdma client deinitialized");
     }
 
-    pub fn post_read(remote_addr: u64, local_addr: u64, length: u32, wr_id: u64) -> bool {
-        let server_idx = remote_addr >> Self::SERVER_IDX_SHIFT;
-        let remote_addr = remote_addr & Self::REMOTE_ADDR_MASK;
-        let tid = get_thread_idx();
-        let conn = &Self::instance().conns[tid];
+    pub fn post_read(remote_addr: RemoteAddr, local_addr: u64, length: u32, wr_id: u64) -> bool {
+        let server_idx = remote_addr.server_id() as usize;
+        let remote_offset = remote_addr.offset();
+        let remote_addr = Self::instance().conns[server_idx].remote_base_addr + remote_offset;
+        let tidx = libfibre_port::cfibre_thread_idx();
+        let conn = &Self::instance().conns[server_idx as usize];
         unsafe {
             rdma::post_read_signal(
-                conn.data_qps[server_idx as usize],
+                conn.data_qps[tidx],
                 Self::instance().lkey,
                 conn.remote_key,
                 remote_addr,
@@ -81,15 +84,16 @@ impl Client {
         }
     }
 
-    pub fn post_write(remote_addr: u64, local_addr: u64, length: u32, wr_id: u64) -> bool {
-        let server_idx = remote_addr >> Self::SERVER_IDX_SHIFT;
-        let remote_addr = remote_addr & Self::REMOTE_ADDR_MASK;
-        let tid = get_thread_idx();
-        debug_assert!(tid < Self::instance().config.num_cores);
-        let conn = &Self::instance().conns[server_idx as usize];
+    pub fn post_write(remote_addr: RemoteAddr, local_addr: u64, length: u32, wr_id: u64) -> bool {
+        let server_idx = remote_addr.server_id() as usize;
+        let remote_offset = remote_addr.offset();
+        let tidx = libfibre_port::cfibre_thread_idx();
+        debug_assert!(tidx < Self::instance().config.num_cores);
+        let conn = &Self::instance().conns[server_idx];
+        let remote_addr = conn.remote_base_addr + remote_offset;
         unsafe {
             rdma::post_write_signal(
-                conn.data_qps[tid as usize],
+                conn.data_qps[tidx],
                 Self::instance().lkey,
                 conn.remote_key,
                 remote_addr,
@@ -107,7 +111,7 @@ impl Client {
         Fr: Fn(u64),
         Fw: Fn(u64),
     {
-        const CHECK_CQ_BATCH_SIZE: usize = 16; // TODO: can this be configurable?
+        const CHECK_CQ_BATCH_SIZE: usize = 32; // TODO: can this be configurable?
         let mut wcs: MaybeUninit<[ibv_wc; CHECK_CQ_BATCH_SIZE]> = MaybeUninit::uninit();
         let n = unsafe {
             rdma::ibv_poll_cq(
@@ -118,7 +122,7 @@ impl Client {
         };
         assert!(n >= 0);
         let n = n as usize;
-        debug_assert!(n < CHECK_CQ_BATCH_SIZE);
+        debug_assert!(n <= CHECK_CQ_BATCH_SIZE);
         let valid_wcs = unsafe { &wcs.assume_init_ref()[0..n] };
         for wc in valid_wcs {
             assert_eq!(wc.status, ibv_wc_status::IBV_WC_SUCCESS);
@@ -146,11 +150,11 @@ impl Client {
         Self::instance().config.client_memory_size
     }
 
-    fn instance() -> &'static Client {
+    pub fn instance() -> &'static Client {
         unsafe { (*(CLIENT_INSTANCE.0.get())).assume_init_ref() }
     }
 
-    fn new(config: Config) -> Client {
+    fn new(config: &Config) -> Client {
         unsafe {
             let memory = allocate_memory(config.client_memory_size);
             let ctx = open_ib_device();
@@ -169,13 +173,14 @@ impl Client {
                 mr,
                 lkey: (*mr).lkey,
                 conns: vec![],
-                config,
+                config: config.clone(),
             }
         }
     }
 
     fn connect(&mut self, idx: usize) -> ConnWithServer {
         // create QPs
+        log::info!("connect start");
         let num_data_qps = self.config.num_cores;
         let num_qps = num_data_qps + 1;
         let mut control_qp =
@@ -206,9 +211,11 @@ impl Client {
         // exchange info
         let addr = self.config.servers[idx].addr.as_str();
         let mut stream = TcpStream::connect(addr).unwrap();
+        info!("connect!");
         bincode::serialize_into(&mut stream, &(client_info, client_qp_info)).unwrap();
         let (server_info, server_qp_info): (ServerInfo, Vec<QPInfo>) =
             bincode::deserialize_from(&mut stream).unwrap();
+        info!("deserialize");
         assert!(server_qp_info.len() == num_qps);
 
         // set up QPs
@@ -230,13 +237,52 @@ impl Client {
 
     fn connect_all(&mut self) {
         let num_servers = self.config.servers.len();
+        log::info!("try to connect to {num_servers} servers");
         self.conns = (0..num_servers).map(|idx| self.connect(idx)).collect();
+    }
+
+    fn post_stop(&self) {
+        for conn in &self.conns {
+            let mut wc = std::mem::MaybeUninit::uninit();
+            loop {
+                if unsafe {
+                    rdma::post_send(
+                        ibv_wr_opcode::IBV_WR_SEND,
+                        ibv_send_flags::IBV_SEND_SIGNALED,
+                        conn.control_qp,
+                        self.lkey,
+                        conn.remote_key,
+                        0,
+                        0,
+                        0,
+                        rdma::RQ_STOP,
+                    )
+                } {
+                    break;
+                } else {
+                    unsafe {
+                        ibv_poll_cq(self.control_cq, 1, wc.as_mut_ptr());
+                    }
+                }
+            }
+            loop {
+                let n = unsafe { ibv_poll_cq(self.control_cq, 1, wc.as_mut_ptr()) };
+                assert!(n <= 1);
+                if n == 1 {
+                    let wc = unsafe { wc.assume_init() };
+                    if wc.wr_id == rdma::RQ_STOP && wc.opcode == ibv_wc_opcode::IBV_WC_SEND {
+                        assert_eq!(wc.status, ibv_wc_status::IBV_WC_SUCCESS);
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
-        warn!("TODO: send a message to the server to tell it that the client is going away");
+        self.post_stop();
         unsafe {
             for conn in self.conns.iter_mut() {
                 let err = ibv_destroy_qp(conn.control_qp);
@@ -269,8 +315,3 @@ static CLIENT_INSTANCE: ClientCell = ClientCell(UnsafeCell::new(MaybeUninit::zer
 
 // All ibverbs api are thread safe
 unsafe impl Sync for Client {}
-
-// TODO: implement this and move this to another file
-fn get_thread_idx() -> usize {
-    0
-}

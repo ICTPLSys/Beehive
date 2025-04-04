@@ -1,11 +1,15 @@
 mod allocator_utils;
 mod entry;
-mod local_allocator;
+pub(crate) mod evacuator;
+pub(crate) mod local_allocator;
 pub mod manager;
 mod object;
 mod pointer;
-mod remote_allocator;
+pub(crate) mod remote_allocator;
 mod scope;
 
-pub use pointer::{RemPtr, RemRef, RemRefMut};
-pub use scope::DerefScope;
+pub use pointer::{RemPtr, RemRef, RemRefMut, RemRefTrait};
+pub use remote_allocator::RemoteAddr;
+pub use scope::{
+    DerefScopeBaseTrait, DerefScopeTrait, RootScope, SingleDerefScope, pin_remref, unpin_remref,
+};
