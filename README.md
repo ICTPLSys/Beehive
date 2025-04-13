@@ -1,10 +1,10 @@
 # 1. Summary of Beehive
 
-Beehive is a memory-disaggregated framework that improves remote access throughput by exploiting the asynchrony within each thread. It allows programmers to develop applications in the conventional multithreaded synchronous model. It automatically transforms the code into *pararoutine* (a newly proposed computation and scheduling unit) based asynchronous code via the Rust compiler.
+Beehive is a memory-disaggregated framework that improves remote access throughput by exploiting the asynchrony within each thread. It allows programmers to develop applications in the conventional multithreaded synchronous model. It automatically transforms the code into *pararoutine* (a newly proposed computation and scheduling unit) based asynchronous code via the Rust compiler. Please refer to our NSDI paper, <a href="https://www.usenix.org/conference/nsdi25/presentation/li-quanxi">Beehive: A Scalable Disaggregated Memory Runtime Exploiting Asynchrony of Multithreaded Programs</a>,  for more details. 
 
 # 2. Setup Environment
 
- You will need at least two servers with RDMA connections to use Beehive. One will serve as the client and the others as the memory servers. Although Beehive Beehive is developed and tested under the following.
+ You will need at least two servers with RDMA connections to use Beehive. One will serve as the client and the others as the memory servers. Beehive has been developed and tested under the following conditions:
 
 - Hardware：
   - Infiniband: Mellanox ConnectX-5 (100Gbps)
@@ -17,7 +17,7 @@ Beehive is a memory-disaggregated framework that improves remote access throughp
 
 # 3. Build and Run
 
-We have the C++ version and Rust version of Beehive. 
+We have the C++ version and the Rust version of Beehive. 
 
 ## 3.1 Preparations
 
