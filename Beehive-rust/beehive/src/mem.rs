@@ -1,5 +1,5 @@
 mod allocator_utils;
-mod entry;
+pub(crate) mod entry;
 pub(crate) mod evacuator;
 pub(crate) mod local_allocator;
 pub mod manager;

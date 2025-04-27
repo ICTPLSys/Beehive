@@ -4,17 +4,17 @@ use super::object::ID;
 use super::pointer::{RemPtr, RemRef, RemRefMut};
 use super::remote_allocator::*;
 use super::scope::DerefScopeTrait;
-use crate::MutatorState;
 use crate::Runtime;
 use crate::mem::entry::{LocalEntry, RemoteEntry};
 use crate::net::Client;
 use crate::net::Config;
+use crate::pararoutine::{self, set_miss_entry, set_task_scope};
 use log::info;
 use std::arch::x86_64::_rdtsc;
 use std::intrinsics::unlikely;
+use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
-use crate::utils::pointer::*;
 #[derive(Debug, Clone, Copy)]
 struct Deadline {
     tsc: u64,
@@ -73,7 +73,7 @@ fn allocate_local_block(
     id: ID,
     remote_addr: RemoteAddr,
     scope: &dyn DerefScopeTrait,
-) -> SendNonNull<BlockHead> {
+) -> NonNull<BlockHead> {
     const MAX_RETRY_COUNT: i32 = 1024;
     let entry = id.get_entry();
     debug_assert!(entry.unwrap().is_remote());
@@ -111,7 +111,7 @@ fn allocate_object<const DIRTY: bool>(
     entry: &mut Entry,
     remote_addr: RemoteAddr,
     scope: &dyn DerefScopeTrait,
-) -> SendNonNull<BlockHead> {
+) -> NonNull<BlockHead> {
     let id = ID::new(entry, size);
     let block = allocate_local_block(size, id, remote_addr, scope);
     entry.init::<DIRTY>(block);
@@ -244,6 +244,15 @@ pub fn deref<'a, T>(
     }
 }
 
+pub async fn deref_async<'a, T: 'a>(ptr: &RemPtr<T>, scope: &dyn DerefScopeTrait) -> RemRef<'a, T> {
+    if let Some(local_addr) = ptr.entry.local_addr_fast_path::<false>() {
+        RemRef::new(unsafe { &*(local_addr as *const T) })
+    } else {
+        let local_addr = deref_slow_path_async::<false>(&ptr.entry, scope).await;
+        RemRef::new(unsafe { &*(local_addr as *const T) })
+    }
+}
+
 pub fn deref_mut<'a, T>(
     ptr: &mut RemPtr<T>,
     miss_handler: &dyn OnMiss,
@@ -253,6 +262,18 @@ pub fn deref_mut<'a, T>(
         RemRefMut::new(unsafe { &mut *(local_addr as *mut T) })
     } else {
         let local_addr = deref_slow_path::<true>(&ptr.entry, miss_handler, scope);
+        RemRefMut::new(unsafe { &mut *(local_addr as *mut T) })
+    }
+}
+
+pub async fn deref_mut_async<'a, T: 'a>(
+    ptr: &mut RemPtr<T>,
+    scope: &dyn DerefScopeTrait,
+) -> RemRefMut<'a, T> {
+    if let Some(local_addr) = ptr.entry.local_addr_fast_path::<true>() {
+        RemRefMut::new(unsafe { &mut *(local_addr as *mut T) })
+    } else {
+        let local_addr = deref_slow_path_async::<true>(&ptr.entry, scope).await;
         RemRefMut::new(unsafe { &mut *(local_addr as *mut T) })
     }
 }
@@ -445,6 +466,97 @@ fn deref_slow_path<const MUT: bool>(
                             }
                         }
                         handle(entry);
+                        // entry are set in handle()
+                        debug_assert!(entry.is_local());
+                        return obj_addr.as_ptr() as u64;
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn deref_slow_path_async<const MUT: bool>(entry: &Entry, scope: &dyn DerefScopeTrait) -> u64 {
+    let mut entry_state = entry.load();
+    let handle = async |entry: &Entry| {
+        while !entry.is_local() {
+            set_miss_entry(entry);
+            set_task_scope(scope);
+            pararoutine::yield_now().await;
+            check_cq();
+        }
+    };
+    loop {
+        match entry_state {
+            WrappedEntry::Null => panic!("deref null object"),
+            WrappedEntry::Local(mut local) => {
+                let old = local.get();
+                if local.is_busy() {
+                    // BUSY
+                    entry_state = entry.load();
+                    continue;
+                }
+                // LOCAL, MARKED, EVICTING
+                if MUT {
+                    local.set_dirty(true);
+                }
+                local.set_accessed(true);
+                local.set_state(LocalState::LOCAL as u64);
+                if let Err(old) = entry.cas_entry_weak(old, local.get(), Ordering::Relaxed) {
+                    entry_state = WrappedEntry::new(old);
+                } else {
+                    return local.addr();
+                }
+            }
+            WrappedEntry::Remote(mut remote) => {
+                if remote.fetching() {
+                    // FETCHING
+                    if let Err(old) =
+                        entry.cas_entry_weak(remote.get(), remote.get(), Ordering::Relaxed)
+                    {
+                        entry_state = WrappedEntry::new(old);
+                        continue;
+                    } else {
+                        handle(entry).await;
+                        match entry.load() {
+                            WrappedEntry::Local(local) => return local.addr(),
+                            _ => panic!("entry should be local after fetch"),
+                        }
+                    }
+                } else {
+                    // REMOTE
+                    let old = remote.get();
+                    let local_block_addr = allocate_local_block(
+                        remote.size() as usize,
+                        ID::new(entry, remote.size() as usize),
+                        RemoteAddr::new_from_addr(remote.addr()),
+                        scope,
+                    );
+                    debug_assert_eq!(entry as *const Entry, unsafe {
+                        local_block_addr.as_ref().get_entry().unwrap()
+                    });
+                    remote.set_fetching(true);
+                    remote.set_dirty(MUT);
+                    if let Err(old) = entry.cas_entry_weak(old, remote.get(), Ordering::Relaxed) {
+                        deallocate_local(unsafe { local_block_addr.as_ptr().add(1) as u64 }, entry);
+                        entry_state = WrappedEntry::new(old);
+                        continue;
+                    } else {
+                        // transform block_addr to obj_addr
+                        let obj_addr = unsafe { local_block_addr.add(1) };
+                        loop {
+                            if Client::post_read(
+                                RemoteAddr::new_from_addr(remote.addr()),
+                                obj_addr.as_ptr() as u64,
+                                remote.size() as u32,
+                                obj_addr.as_ptr() as u64,
+                            ) {
+                                break;
+                            } else {
+                                check_cq();
+                            }
+                        }
+                        handle(entry).await;
                         // entry are set in handle()
                         debug_assert!(entry.is_local());
                         return obj_addr.as_ptr() as u64;

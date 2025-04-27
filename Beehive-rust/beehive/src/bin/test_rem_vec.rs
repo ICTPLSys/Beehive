@@ -1,13 +1,14 @@
 use beehive::{
     mem::RootScope,
+    pararoutine::Executor,
     rem_data_struct::{
-        rem_iter::{RemIterator, RemZip2},
+        rem_iter::{AsyncZipTrait, RemIterator, RemZip2},
         rem_vec::RemVec,
     },
     thread::fork_join_with_id_with_scope,
 };
 use beehive_helper::beehive_main;
-use sync_ptr::SyncMutPtr;
+use sync_ptr::{SendConstPtr, SyncMutPtr};
 const VEC_SIZE: usize = 10000000;
 const THREAD_NUM: usize = 16;
 fn test_single_thread() {
@@ -69,6 +70,7 @@ fn test_multi_thread() {
     });
     println!("test_multi_thread success");
 }
+
 fn test_zip() {
     let mut rem_vec1 = RemVec::<usize>::with_capacity(VEC_SIZE);
     let mut rem_vec2 = RemVec::<usize>::with_capacity(VEC_SIZE);
@@ -192,23 +194,62 @@ fn test_copy_to_local() {
     println!("test_copy_to_local success");
 }
 
-fn test_group_iter() {
+fn test_pararoutine() {
+    const PARAROUTINE_NUM: usize = 64;
     let mut rem_vec = RemVec::<usize>::with_capacity(VEC_SIZE);
     let scope = RootScope::root();
-    {
-        for i in 0..VEC_SIZE {
-            rem_vec.push(i, &scope);
-        }
+    for i in 0..VEC_SIZE {
+        rem_vec.push(i, &scope);
     }
-    let group_count = rem_vec.groups_count() - 1;
-    for (i, (_, elem)) in
-        RemIterator::new(rem_vec.group_iter_sync_with_setting(0, group_count), &scope).enumerate()
-    {
-        for (j, elem) in elem.iter().enumerate() {
-            assert_eq!(*elem, i * rem_vec.group_size() + j);
-        }
-    }
-    println!("test_group_iter success");
+    let mut executor = Executor::new_default(&scope);
+    (0..PARAROUTINE_NUM).for_each(|id| {
+        let rem_vec = unsafe { SendConstPtr::new(&rem_vec) };
+        executor.spawn(|scope| async move {
+            let rem_vec = unsafe { rem_vec.as_ref().unwrap() };
+            let start = id * (VEC_SIZE + PARAROUTINE_NUM - 1) / PARAROUTINE_NUM;
+            let end = ((id + 1) * (VEC_SIZE + PARAROUTINE_NUM - 1) / PARAROUTINE_NUM).min(VEC_SIZE);
+            let mut it = RemIterator::new(rem_vec.iter_async_with_setting(start, end, 1), scope);
+            for i in start..end {
+                if let Some((_, elem)) = it.next_async().await {
+                    assert_eq!(*elem, i);
+                }
+            }
+        })
+    });
+    executor.poll();
+
+    (0..PARAROUTINE_NUM).for_each(|id| {
+        let rem_vec_ptr = unsafe { SyncMutPtr::new(&mut rem_vec) };
+        executor.spawn(|scope| async move {
+            let rem_vec = unsafe { rem_vec_ptr.as_mut().unwrap() };
+            let start = id * (VEC_SIZE + PARAROUTINE_NUM - 1) / PARAROUTINE_NUM;
+            let end = ((id + 1) * (VEC_SIZE + PARAROUTINE_NUM - 1) / PARAROUTINE_NUM).min(VEC_SIZE);
+            let mut it =
+                RemIterator::new(rem_vec.iter_mut_async_with_setting(start, end, 1), scope);
+            for i in start..end {
+                if let Some((_, mut elem)) = it.next_async().await {
+                    *elem = VEC_SIZE - i;
+                }
+            }
+        })
+    });
+    executor.poll();
+
+    (0..PARAROUTINE_NUM).for_each(|id| {
+        let rem_vec = unsafe { SendConstPtr::new(&rem_vec) };
+        executor.spawn(|scope| async move {
+            let rem_vec = unsafe { rem_vec.as_ref().unwrap() };
+            let start = id * (VEC_SIZE + PARAROUTINE_NUM - 1) / PARAROUTINE_NUM;
+            let end = ((id + 1) * (VEC_SIZE + PARAROUTINE_NUM - 1) / PARAROUTINE_NUM).min(VEC_SIZE);
+            let mut it = RemIterator::new(rem_vec.iter_sync_with_setting(start, end, 1), scope);
+            for i in start..end {
+                if let Some((_, elem)) = it.next_async().await {
+                    assert_eq!(*elem, VEC_SIZE - i);
+                }
+            }
+        });
+    });
+    println!("test pararoutine success");
 }
 
 #[beehive_main]
@@ -218,5 +259,5 @@ fn main() {
     test_zip();
     test_async();
     test_copy_to_local();
-    test_group_iter();
+    test_pararoutine();
 }

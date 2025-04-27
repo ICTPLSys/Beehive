@@ -66,7 +66,6 @@ pub trait DerefScopeTrait: DerefScopeBaseTrait {
     }
 }
 
-impl<T: DerefScopeBaseTrait> DerefScopeTrait for T {}
 pub struct RootScope {
     // avoid explictly construction
     _pad: (),
@@ -98,6 +97,8 @@ impl DerefScopeBaseTrait for RootScope {
         SingleDerefScope::new(Some(self), remref)
     }
 }
+
+impl DerefScopeTrait for RootScope {}
 
 impl Drop for RootScope {
     fn drop(&mut self) {
@@ -159,6 +160,7 @@ impl<'a> DerefScopeBaseTrait for SingleDerefScope<'a> {
     }
 }
 
+impl<'a> DerefScopeTrait for SingleDerefScope<'a> {}
 impl<'a> Drop for SingleDerefScope<'a> {
     fn drop(&mut self) {
         debug_assert_ne!(

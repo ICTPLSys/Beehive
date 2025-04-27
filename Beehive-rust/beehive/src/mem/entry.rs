@@ -1,7 +1,7 @@
 use super::local_allocator::BlockHead;
 use crate::utils::bitfield::*;
-use crate::utils::pointer::*;
 use core::intrinsics::likely;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[repr(C)]
@@ -262,7 +262,7 @@ impl Entry {
     }
 
     #[inline]
-    pub fn init<const DIRTY: bool>(&mut self, block: SendNonNull<BlockHead>) {
+    pub fn init<const DIRTY: bool>(&mut self, block: NonNull<BlockHead>) {
         let addr = unsafe { block.as_ptr().add(1) as u64 };
         self.set_local(LocalEntry::new(LocalState::LOCAL, true, DIRTY, 0, addr));
     }

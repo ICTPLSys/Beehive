@@ -1,4 +1,4 @@
-use crate::manager::{OnMiss, deref, deref_mut};
+use crate::manager::{OnMiss, deref, deref_async, deref_mut, deref_mut_async};
 use crate::mem::{DerefScopeTrait, manager};
 use crate::mem::{RemPtr, RemRef, RemRefMut};
 use crate::utils::bitfield::*;
@@ -184,6 +184,31 @@ where
         }
     }
 
+    async fn cas_busy_async(&mut self) {
+        let mut old_state: EntryState = self.state.load(Ordering::Relaxed).into();
+        debug_assert_eq!(old_state.state(), EntryState::IMMUT);
+        loop {
+            if old_state.read_cnt() > 0 {
+                crate::pararoutine::yield_now().await;
+                old_state = self.state.load(Ordering::Relaxed).into();
+                continue;
+            }
+            let new_state = EntryState::busy_state();
+            match self.state.compare_exchange_weak(
+                old_state.into(),
+                new_state.into(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(state) => {
+                    old_state = state.into();
+                    continue;
+                }
+            }
+        }
+    }
+
     fn cas_immut(&mut self) {
         let old_state: EntryState = self.state.load(Ordering::Relaxed).into();
         debug_assert_eq!(old_state.state(), EntryState::BUSY);
@@ -203,6 +228,31 @@ where
         loop {
             if old_state.read_cnt() > 0 {
                 libfibre_port::yield_now();
+                old_state = self.state.load(Ordering::Relaxed).into();
+                continue;
+            }
+            debug_assert_eq!(old_state.state(), EntryState::IMMUT);
+            let new_state = EntryState::write_state();
+            match self.state.compare_exchange_weak(
+                old_state.into(),
+                new_state.into(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(state) => {
+                    old_state = state.into();
+                    continue;
+                }
+            }
+        }
+    }
+
+    async fn write_lock_async(&mut self) {
+        let mut old_state: EntryState = self.state.load(Ordering::Relaxed).into();
+        loop {
+            if old_state.read_cnt() > 0 {
+                crate::pararoutine::yield_now().await;
                 old_state = self.state.load(Ordering::Relaxed).into();
                 continue;
             }
@@ -270,6 +320,39 @@ where
         }
     }
 
+    async fn read_lock_async(&mut self, bucket_lock: bool) -> bool {
+        let mut old_state: EntryState = self.state.load(Ordering::Relaxed).into();
+        loop {
+            let mut new_state = old_state;
+            debug_assert!(
+                !bucket_lock
+                    || new_state.state() == EntryState::FREE
+                    || new_state.state() == EntryState::IMMUT
+            );
+            if new_state.state() == EntryState::FREE || new_state.state() == EntryState::BUSY {
+                return false;
+            }
+            if !bucket_lock && new_state.state() == EntryState::WRITE {
+                crate::pararoutine::yield_now().await;
+                old_state = self.state.load(Ordering::Relaxed).into();
+                continue;
+            }
+            new_state.inc_read_cnt();
+            match self.state.compare_exchange_weak(
+                old_state.into(),
+                new_state.into(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(state) => {
+                    old_state = state.into();
+                    continue;
+                }
+            }
+        }
+    }
+
     fn read_unlock(&mut self) {
         let mut old_state: EntryState = self.state.load(Ordering::Relaxed).into();
         loop {
@@ -308,6 +391,34 @@ where
         self.data
             .as_mut()
             .map(|data| deref_mut(data, on_miss, scope))
+    }
+
+    async fn data_ref_async<'a>(
+        &self,
+        scope: &dyn DerefScopeTrait,
+    ) -> Option<RemRef<'a, Data<K, V>>>
+    where
+        K: 'a,
+        V: 'a,
+    {
+        match self.data.as_ref() {
+            Some(data) => Some(deref_async(data, scope).await),
+            None => None,
+        }
+    }
+
+    async fn data_ref_mut_async<'a>(
+        &mut self,
+        scope: &dyn DerefScopeTrait,
+    ) -> Option<RemRefMut<'a, Data<K, V>>>
+    where
+        K: 'a,
+        V: 'a,
+    {
+        match self.data.as_mut() {
+            Some(data) => Some(deref_mut_async(data, scope).await),
+            None => None,
+        }
     }
 
     fn is_free(&self) -> bool {
@@ -442,6 +553,17 @@ where
     fn entry_lock_bitmap(&mut self, entry_idx: usize, scope: &dyn DerefScopeTrait) -> u32 {
         let entry = &mut self.entries[entry_idx];
         entry.spin.lock_with_scope(scope);
+        entry.bitmap
+    }
+
+    #[inline]
+    async fn entry_lock_bitmap_async(
+        &mut self,
+        entry_idx: usize,
+        scope: &dyn DerefScopeTrait,
+    ) -> u32 {
+        let entry = &mut self.entries[entry_idx];
+        entry.spin.lock_async_with_scope(scope).await;
         entry.bitmap
     }
 
@@ -831,5 +953,373 @@ where
             }
             bitmap ^= 1 << offset;
         }
+    }
+
+    pub async fn get_async<F>(&mut self, key: &K, mut read: F, scope: &dyn DerefScopeTrait) -> bool
+    where
+        F: FnMut(&K, &V, &dyn DerefScopeTrait),
+    {
+        let hash = self.get_hash(key);
+        let bucket_idx = hash as usize;
+
+        let mut retry_count: usize = 0;
+
+        let mut get_once = async |lock: bool| -> (bool, bool) {
+            let (mut bitmap, timestamp) = {
+                let bucket_bitmap = {
+                    if lock {
+                        self.entry_lock_bitmap_async(bucket_idx, scope).await
+                    } else {
+                        self.entries[bucket_idx].bitmap
+                    }
+                };
+                let entries = &mut self.entries;
+                let bucket = &mut entries[bucket_idx];
+                (bucket_bitmap, bucket.timestamp.load(Ordering::Relaxed))
+            };
+            let mut res = false;
+            while bitmap != 0 {
+                let offset = bitmap.trailing_zeros();
+                debug_assert!(offset < 32);
+                let entry = &mut self.entries[bucket_idx + offset as usize];
+                let entry_ptr = entry as *mut RemConcurrentMapEntry<K, V>;
+                if let Some(data) = entry.data_ref_async(scope).await {
+                    if data.key() == key {
+                        let scope = scope.push(&data);
+                        // bypass compiler check by using pointer
+                        unsafe { entry_ptr.as_mut_unchecked().read_lock_async(lock).await };
+                        read(key, data.value(), &scope);
+                        unsafe { entry_ptr.as_mut_unchecked().read_unlock() };
+                        res = true;
+                        break;
+                    }
+                }
+                bitmap ^= 1 << offset;
+            }
+            if lock {
+                self.entry_unlock(bucket_idx);
+            }
+            let bucket = &mut self.entries[bucket_idx];
+            (res, bucket.timestamp() != timestamp)
+        };
+        // fast path
+        loop {
+            let (res, need_continue) = get_once(false).await;
+            if res {
+                return true;
+            }
+            retry_count += 1;
+            if retry_count > Self::MAX_RETRY || !need_continue {
+                break;
+            }
+        }
+        // slow path
+        get_once(true).await.0
+    }
+
+    pub async fn remove_async(&mut self, key: &K, scope: &dyn DerefScopeTrait) -> bool {
+        let hash = self.get_hash(key);
+        let bucket_idx = hash as usize;
+        let mut bitmap = self.entry_lock_bitmap_async(bucket_idx, scope).await;
+        while bitmap != 0 {
+            let offset = bitmap.trailing_zeros();
+            debug_assert!(offset < 32);
+            let removed = {
+                let entry = &mut self.entries[bucket_idx + offset as usize];
+                if let Some(data) = entry.data_ref_async(scope).await {
+                    if data.key() == key {
+                        entry.cas_busy_async().await;
+                        entry.data = None;
+                        entry.cas_free();
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            if removed {
+                let bucket = &mut self.entries[bucket_idx];
+                debug_assert!(bucket.is_locked());
+                debug_assert_ne!(bucket.bitmap & (1 << offset), 0);
+                bucket.bitmap ^= 1 << offset;
+                bucket.timestamp.fetch_add(1, Ordering::Relaxed);
+                self.entry_unlock(bucket_idx);
+                self.size.fetch_sub(1, Ordering::Relaxed);
+                return true;
+            }
+            bitmap ^= 1 << offset;
+        }
+        self.entry_unlock(bucket_idx);
+        return false;
+    }
+
+    pub async fn insert_async(&mut self, key: K, value: V, scope: &dyn DerefScopeTrait) -> bool {
+        let hash = self.get_hash(&key);
+        let mut bucket_idx = hash as usize;
+        let orig_bucket_idx = bucket_idx;
+        let mut bitmap = self.entry_lock_bitmap_async(orig_bucket_idx, scope).await;
+        while bitmap != 0 {
+            let offset = bitmap.trailing_zeros();
+            debug_assert!(offset < 32);
+            let entry = &mut self.entries[orig_bucket_idx + offset as usize];
+            let entry_ptr = entry as *mut RemConcurrentMapEntry<K, V>;
+            // 1.key exists, update
+            if let Some(mut data) = entry.data_ref_mut_async(scope).await {
+                if *data.key() == key {
+                    unsafe { entry_ptr.as_mut_unchecked().write_lock_async().await };
+                    *data.value_mut() = value;
+                    unsafe { entry_ptr.as_mut_unchecked().write_unlock() };
+                    self.entry_unlock(orig_bucket_idx);
+                    return true;
+                }
+            }
+            bitmap ^= 1 << offset;
+        }
+        // 2. not exists, find empty slot to insert
+        while bucket_idx < self.num_entries {
+            if self.entries[bucket_idx].cas_free_to_busy() {
+                break;
+            }
+            bucket_idx += 1;
+        }
+        // 3. buckets full, can not insert
+        if bucket_idx == self.num_entries {
+            self.entry_unlock(orig_bucket_idx);
+            panic!("hashmap is full");
+        }
+
+        // 2.4 buckets not full, move this bucket to the neighborhood
+        let mut distance_to_orig_bucket = bucket_idx - orig_bucket_idx;
+        while distance_to_orig_bucket >= Self::NEIGHBOR_COUNT {
+            // Try to see if we can move things backward.
+            let mut distance = 0;
+            for d in (1..=Self::NEIGHBOR_COUNT - 1).rev() {
+                let idx = bucket_idx - d;
+                {
+                    let anchor_entry = &mut self.entries[idx];
+                    if anchor_entry.bitmap == 0 {
+                        continue;
+                    }
+                }
+                // Lock and recheck bitmap.
+                let bitmap = self.entry_lock_bitmap_async(idx, scope).await;
+                if bitmap == 0 {
+                    self.entry_unlock(idx);
+                    continue;
+                }
+                // Get the offset of the first entry within the bucket.
+                let offset = bitmap.trailing_zeros();
+                debug_assert!(offset < 32);
+                if idx + offset as usize >= bucket_idx {
+                    self.entry_unlock(idx);
+                    continue;
+                }
+                // Swap entry [closest_bucket + offset] and [bucket_idx]
+                {
+                    let (left, right) = self.entries.split_at_mut(bucket_idx);
+                    let from_entry = &mut left[idx + offset as usize];
+                    let to_entry = &mut right[0];
+                    to_entry.move_from(from_entry);
+                }
+                {
+                    let anchor_entry = &mut self.entries[idx];
+                    debug_assert_eq!(anchor_entry.bitmap & (1 << d), 0);
+                    anchor_entry.bitmap |= 1 << d;
+                    anchor_entry.timestamp.fetch_add(1, Ordering::Relaxed);
+                }
+                {
+                    let from_entry = &mut self.entries[idx + offset as usize];
+                    from_entry.cas_busy_async().await;
+                }
+                {
+                    let anchor_entry = &mut self.entries[idx];
+                    debug_assert_ne!(anchor_entry.bitmap & (1 << offset), 0);
+                    anchor_entry.bitmap ^= 1 << offset;
+                }
+
+                // Jump backward.
+                bucket_idx = idx + offset as usize;
+                self.entry_unlock(idx);
+                distance = d;
+                break;
+            }
+            if distance == 0 {
+                self.entry_unlock(orig_bucket_idx);
+                return false;
+            }
+            distance_to_orig_bucket = bucket_idx - orig_bucket_idx;
+        }
+        // Allocate memory.
+        // final entry has been locked
+        {
+            let final_entry = &mut self.entries[bucket_idx];
+            debug_assert!(final_entry.is_busy());
+            self.size.fetch_add(1, Ordering::Relaxed);
+            debug_assert!(final_entry.data.is_none());
+            final_entry.data = Some(RemPtr::null());
+            manager::allocate(
+                final_entry.data.as_mut().unwrap(),
+                Some(Data::new(key, value)),
+                scope,
+            );
+        }
+        {
+            let bucket = &mut self.entries[orig_bucket_idx];
+            debug_assert_eq!(bucket.bitmap & (1 << distance_to_orig_bucket), 0);
+            bucket.bitmap |= 1 << distance_to_orig_bucket;
+        }
+        {
+            let final_entry = &mut self.entries[bucket_idx];
+            final_entry.cas_immut();
+        }
+        self.entry_unlock(orig_bucket_idx);
+        return true;
+    }
+
+    pub async fn update_async<F>(
+        &mut self,
+        key: K,
+        value: Option<V>,
+        mut update: F,
+        scope: &dyn DerefScopeTrait,
+    ) -> bool
+    where
+        F: FnMut(&K, &mut V, &dyn DerefScopeTrait),
+    {
+        let hash = self.get_hash(&key);
+        let mut bucket_idx = hash as usize;
+        let orig_bucket_idx = bucket_idx;
+        let mut bitmap = self.entry_lock_bitmap_async(orig_bucket_idx, scope).await;
+        while bitmap != 0 {
+            let offset = bitmap.trailing_zeros();
+            debug_assert!(offset < 32);
+            let entry = &mut self.entries[orig_bucket_idx + offset as usize];
+            let entry_ptr = entry as *mut RemConcurrentMapEntry<K, V>;
+            // 1.key exists, update
+            if let Some(mut data) = entry.data_ref_mut_async(scope).await {
+                if *data.key() == key {
+                    unsafe { entry_ptr.as_mut_unchecked().write_lock_async().await };
+                    // if exists, update
+                    let scope = scope.push(&data);
+                    update(&key, data.value_mut(), &scope);
+                    unsafe { entry_ptr.as_mut_unchecked().write_unlock() };
+                    self.entry_unlock(orig_bucket_idx);
+                    return true;
+                }
+            }
+            bitmap ^= 1 << offset;
+        }
+        if let None = value {
+            self.entry_unlock(orig_bucket_idx);
+            return false;
+        }
+        let value = value.unwrap();
+        // 2. not exists, find empty slot to insert
+        while bucket_idx < self.num_entries {
+            if self.entries[bucket_idx].cas_free_to_busy() {
+                break;
+            }
+            bucket_idx += 1;
+        }
+        // 3. buckets full, can not insert
+        if bucket_idx == self.num_entries {
+            self.entry_unlock(orig_bucket_idx);
+            panic!("hashmap is full");
+        }
+
+        // 2.4 buckets not full, move this bucket to the neighborhood
+        let mut distance_to_orig_bucket = bucket_idx - orig_bucket_idx;
+        while distance_to_orig_bucket > Self::NEIGHBOR_COUNT {
+            // Try to see if we can move things backward.
+            let mut distance = 0;
+            for d in (1..=Self::NEIGHBOR_COUNT - 1).rev() {
+                let idx = bucket_idx - d;
+                {
+                    let anchor_entry = &mut self.entries[idx];
+                    if anchor_entry.bitmap == 0 {
+                        continue;
+                    }
+                }
+                // Lock and recheck bitmap.
+                let bitmap = self.entry_lock_bitmap_async(idx, scope).await;
+                if bitmap == 0 {
+                    self.entry_unlock(idx);
+                    continue;
+                }
+                // Get the offset of the first entry within the bucket.
+                let offset = bitmap.trailing_zeros();
+                debug_assert!(offset < 32);
+                if idx + offset as usize >= bucket_idx {
+                    self.entry_unlock(idx);
+                    continue;
+                }
+                // Swap entry [closest_bucket + offset] and [bucket_idx]
+                {
+                    let (left, right) = self.entries.split_at_mut(bucket_idx);
+                    let from_entry = &mut left[idx + offset as usize];
+                    let to_entry = &mut right[0];
+                    to_entry.move_from(from_entry);
+                }
+                {
+                    let anchor_entry = &mut self.entries[idx];
+                    debug_assert_eq!(anchor_entry.bitmap & (1 << d), 0);
+                    anchor_entry.bitmap |= 1 << d;
+                    anchor_entry.timestamp.fetch_add(1, Ordering::Relaxed);
+                }
+                {
+                    let from_entry = &mut self.entries[idx + offset as usize];
+                    from_entry.cas_busy_async().await;
+                }
+                {
+                    let anchor_entry = &mut self.entries[idx];
+                    debug_assert_ne!(anchor_entry.bitmap & (1 << offset), 0);
+                    anchor_entry.bitmap ^= 1 << offset;
+                }
+
+                // Jump backward.
+                bucket_idx = idx + offset as usize;
+                self.entry_unlock(idx);
+                distance = d;
+                break;
+            }
+            if distance == 0 {
+                self.entry_unlock(orig_bucket_idx);
+                return false;
+            }
+            distance_to_orig_bucket = bucket_idx - orig_bucket_idx;
+        }
+        // Allocate memory.
+        // final entry has been locked
+        {
+            let final_entry = &mut self.entries[bucket_idx];
+            debug_assert!(final_entry.is_busy());
+            self.size.fetch_add(1, Ordering::Relaxed);
+            final_entry.data = Some(RemPtr::null());
+            let mut data = manager::allocate(
+                final_entry.data.as_mut().unwrap(),
+                Some(Data::new(key, value)),
+                scope,
+            );
+            let scope = scope.push(&data);
+            unsafe {
+                // bypass compiler check by using pointer
+                let k = data.key() as *const K;
+                let v = data.value_mut() as *mut V;
+                update(&*k, &mut *v, &scope);
+            }
+        }
+        {
+            let bucket = &mut self.entries[orig_bucket_idx];
+            debug_assert_eq!(bucket.bitmap & (1 << distance_to_orig_bucket), 0);
+            bucket.bitmap |= 1 << distance_to_orig_bucket;
+        }
+        {
+            let final_entry = &mut self.entries[bucket_idx];
+            final_entry.cas_immut();
+        }
+        self.entry_unlock(orig_bucket_idx);
+        return true;
     }
 }

@@ -26,10 +26,6 @@ impl<T, const GROUP_SIZE: usize> RemVec<T, GROUP_SIZE> {
         new_vec
     }
 
-    pub const fn group_size(&self) -> usize {
-        GROUP_SIZE
-    }
-
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             groups: Vec::with_capacity((capacity + GROUP_SIZE - 1) / GROUP_SIZE),
@@ -116,6 +112,21 @@ impl<T, const GROUP_SIZE: usize> RemVec<T, GROUP_SIZE> {
             (*rem_mut_ref)[0] = val;
         } else {
             let mut rem_mut_ref = manager::deref_mut_sync(self.groups.last_mut().unwrap(), scope);
+            (*rem_mut_ref)[inner_idx] = val;
+        }
+        self.size += 1;
+    }
+
+    pub async fn push_async(&mut self, val: T, scope: &dyn DerefScopeTrait) {
+        debug_assert!(self.capacity() >= self.size());
+        let inner_idx = self.size() % GROUP_SIZE;
+        if inner_idx == 0 {
+            self.groups.push(RemPtr::null());
+            let mut rem_mut_ref = manager::allocate(self.groups.last_mut().unwrap(), None, scope);
+            (*rem_mut_ref)[0] = val;
+        } else {
+            let mut rem_mut_ref =
+                manager::deref_mut_async(self.groups.last_mut().unwrap(), scope).await;
             (*rem_mut_ref)[inner_idx] = val;
         }
         self.size += 1;
@@ -343,6 +354,64 @@ impl<T, const GROUP_SIZE: usize> RemVec<T, GROUP_SIZE> {
             },
         )
     }
+
+    // async iterator struct is the same as normal iterator
+    // but use different next function
+    pub fn iter_async(&self) -> RemVecIter<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.iter_sync()
+    }
+
+    pub fn iter_mut_async(
+        &mut self,
+    ) -> RemVecIterMut<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.iter_mut_sync()
+    }
+
+    pub fn group_iter_async(
+        &self,
+    ) -> RemVecGroupIter<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.group_iter_sync()
+    }
+
+    pub fn group_iter_mut_async(
+        &mut self,
+    ) -> RemVecGroupIterMut<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.group_iter_mut_sync()
+    }
+
+    pub fn iter_async_with_setting(
+        &self,
+        start: usize,
+        end: usize,
+        step: usize,
+    ) -> RemVecIter<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.iter_sync_with_setting(start, end, step)
+    }
+
+    pub fn iter_mut_async_with_setting(
+        &mut self,
+        start: usize,
+        end: usize,
+        step: usize,
+    ) -> RemVecIterMut<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.iter_mut_sync_with_setting(start, end, step)
+    }
+
+    pub fn group_iter_async_with_setting(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> RemVecGroupIter<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.group_iter_sync_with_setting(start, end)
+    }
+
+    pub fn group_iter_mut_async_with_setting(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> RemVecGroupIterMut<T, GROUP_SIZE, impl RemVecIterOnMiss<T, GROUP_SIZE>> {
+        self.group_iter_mut_sync_with_setting(start, end)
+    }
 }
 
 impl<T, const GROUP_SIZE: usize> RemVec<T, GROUP_SIZE>
@@ -420,7 +489,7 @@ impl<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> RemIter
                     scope,
                 ))
             });
-            Some(unsafe { std::mem::transmute_copy(&self.rem_ref) })
+            Some(unsafe { std::mem::transmute(&self.rem_ref) })
         }
     }
 
@@ -433,6 +502,20 @@ impl<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> RemIter
     fn unpin(&self, scope: &dyn DerefScopeTrait) {
         if let Some(rem_ref) = &self.rem_ref {
             unpin_remref(rem_ref, scope);
+        }
+    }
+
+    async fn next_async(&mut self, scope: &dyn DerefScopeTrait) -> Option<Self::Item> {
+        self.rem_ref = None;
+        if self.group_idx >= self.end {
+            None
+        } else {
+            let group_idx = self.group_idx;
+            self.group_idx += 1;
+            self.rem_ref = Some(unsafe {
+                std::mem::transmute(manager::deref_async(&self.vec.groups[group_idx], scope).await)
+            });
+            Some(unsafe { std::mem::transmute(&self.rem_ref) })
         }
     }
 }
@@ -498,6 +581,21 @@ impl<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> RemIter
     fn unpin(&self, scope: &dyn DerefScopeTrait) {
         self.group_iter.unpin(scope);
     }
+
+    async fn next_async(&mut self, scope: &dyn DerefScopeTrait) -> Option<Self::Item> {
+        if self.idx >= self.end {
+            return None;
+        }
+        let (group_idx, inner_idx) = (self.idx / GROUP_SIZE, self.idx % GROUP_SIZE);
+        if group_idx == self.group_iter.group_idx {
+            self.group_iter.next_async(scope).await;
+        }
+        self.idx += self.step;
+        self.group_iter
+            .rem_ref
+            .as_ref()
+            .map(|rem_ref| RemRef::new(unsafe { std::mem::transmute(&(*rem_ref)[inner_idx]) }))
+    }
 }
 
 pub struct RemVecGroupIterMut<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> {
@@ -553,7 +651,7 @@ impl<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> RemIter
                     scope,
                 ))
             });
-            Some(unsafe { std::mem::transmute_copy(&self.rem_ref) })
+            Some(unsafe { std::mem::transmute(&self.rem_ref) })
         }
     }
 
@@ -568,8 +666,25 @@ impl<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> RemIter
             unpin_remref(rem_ref, scope);
         }
     }
-}
 
+    async fn next_async(&mut self, scope: &dyn DerefScopeTrait) -> Option<Self::Item> {
+        self.rem_ref = None;
+        if self.group_idx >= self.end {
+            None
+        } else {
+            let group_idx = self.group_idx;
+            self.group_idx += 1;
+            let self_ptr = self.vec as *const RemVec<T, GROUP_SIZE>;
+            let on_miss = &mut self.on_miss as *mut F;
+            self.rem_ref = Some(unsafe {
+                std::mem::transmute(
+                    manager::deref_mut_async(&mut self.vec.groups[group_idx], scope).await,
+                )
+            });
+            Some(unsafe { std::mem::transmute(&self.rem_ref) })
+        }
+    }
+}
 pub struct RemVecIterMut<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> {
     group_iter: RemVecGroupIterMut<'a, T, GROUP_SIZE, F>,
     start: usize,
@@ -629,5 +744,19 @@ impl<'a, T, const GROUP_SIZE: usize, F: RemVecIterOnMiss<T, GROUP_SIZE>> RemIter
 
     fn unpin(&self, scope: &dyn DerefScopeTrait) {
         self.group_iter.unpin(scope);
+    }
+
+    async fn next_async(&mut self, scope: &dyn DerefScopeTrait) -> Option<Self::Item> {
+        if self.idx >= self.end {
+            return None;
+        }
+        let (group_idx, inner_idx) = (self.idx / GROUP_SIZE, self.idx % GROUP_SIZE);
+        if group_idx == self.group_iter.group_idx {
+            self.group_iter.next_async(scope).await;
+        }
+        self.idx += self.step;
+        self.group_iter.rem_ref.as_mut().map(|rem_ref| {
+            RemRefMut::new(unsafe { std::mem::transmute(&mut (*rem_ref)[inner_idx]) })
+        })
     }
 }

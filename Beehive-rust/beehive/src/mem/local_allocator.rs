@@ -12,8 +12,8 @@ use super::scope::DerefScopeTrait;
 use super::{RemoteAddr, allocator_utils::*};
 use crate::check_memory_low;
 use crate::mem::entry::{LocalState, RemoteEntry};
-use crate::utils::pointer::*;
 use crate::utils::spinlock::SpinPollingLock;
+use std::ptr::NonNull;
 use sync_ptr::SendMutPtr;
 
 #[repr(C)]
@@ -29,7 +29,7 @@ unsafe impl Send for BlockHead {}
 #[repr(C)]
 #[derive(Debug)]
 struct ListNode {
-    next: Option<SendNonNull<ListNode>>,
+    next: Option<NonNull<ListNode>>,
 }
 
 #[repr(C)]
@@ -37,9 +37,9 @@ struct ListNode {
 struct RegionHead {
     link: ListNode,
     state: RegionState,
-    free_list: Option<SendNonNull<BlockHead>>,
-    active_list: Option<SendNonNull<BlockHead>>,
-    marked_list: Option<SendNonNull<BlockHead>>,
+    free_list: Option<NonNull<BlockHead>>,
+    active_list: Option<NonNull<BlockHead>>,
+    marked_list: Option<NonNull<BlockHead>>,
     used_count: u32,
     unused_offset: u32,
     bin: u32,
@@ -51,7 +51,7 @@ unsafe impl Send for RegionHead {}
 struct RegionList {
     lock: SpinPollingLock,
     head: ListNode,
-    tail: Option<SendNonNull<ListNode>>,
+    tail: Option<NonNull<ListNode>>,
 }
 
 pub(crate) struct GlobalHeap {
@@ -74,7 +74,7 @@ pub(super) unsafe fn allocate_block(
     size: usize,
     id: object::ID,
     scope: &dyn DerefScopeTrait,
-) -> Option<SendNonNull<BlockHead>> {
+) -> Option<NonNull<BlockHead>> {
     let wsize = wsize_from_size(size + size_of::<BlockHead>());
     let bin = bin_from_wsize(wsize);
     debug_assert!(bin_size(bin) >= size + size_of::<BlockHead>());
@@ -147,13 +147,12 @@ impl GlobalHeap {
         GLOBAL_HEAP_INITIALIZED.store(false, Ordering::Relaxed);
     }
 
-    #[allow(static_mut_refs)]
     pub fn instance() -> &'static mut GlobalHeap {
         unsafe { &mut *GLOBAL_HEAP.as_mut_ptr() }
     }
 
     fn return_back_region(self: &mut GlobalHeap, region: SendMutPtr<RegionHead>) {
-        let region_ptr = unsafe { SendNonNull::new_unchecked(region.inner()) };
+        let region_ptr = unsafe { NonNull::new_unchecked(region.inner()) };
         let region = unsafe { region.as_mut_unchecked() };
         if unlikely(region.can_allocate()) {
             let bin = region.bin;
@@ -210,7 +209,7 @@ impl GlobalHeap {
             ) {
                 Ok(_) => {
                     let mut region = unsafe {
-                        SendNonNull::new_unchecked(self.heap.add(offset).cast::<RegionHead>())
+                        NonNull::new_unchecked(self.heap.add(offset).cast::<RegionHead>())
                     };
                     unsafe { region.as_mut().init(bin) };
                     let previous = self
@@ -269,13 +268,12 @@ impl GlobalHeap {
 }
 
 impl ThreadHeap {
-    #[allow(static_mut_refs)]
     unsafe fn allocate_block(
         self: &mut ThreadHeap,
         bin: usize,
         id: object::ID,
         scope: &dyn DerefScopeTrait,
-    ) -> Option<SendNonNull<BlockHead>> {
+    ) -> Option<NonNull<BlockHead>> {
         let region = self.regions[bin];
         if likely(!region.is_null()) {
             let block = unsafe { region.as_mut_unchecked().allocate(id) };
@@ -312,7 +310,7 @@ impl RegionList {
     }
 
     /// push a node to the tail of the list
-    fn push(&mut self, node: SendNonNull<RegionHead>) {
+    fn push(&mut self, node: NonNull<RegionHead>) {
         unsafe { node.as_ptr().cast::<ListNode>().as_mut_unchecked().next = None };
         self.lock.lock();
         match self.tail {
@@ -330,7 +328,7 @@ impl RegionList {
     }
 
     /// pop a node from the front of the list
-    fn pop(&mut self) -> Option<SendNonNull<RegionHead>> {
+    fn pop(&mut self) -> Option<NonNull<RegionHead>> {
         self.lock.lock();
         let front = self.head.next;
         match front {
@@ -350,7 +348,7 @@ impl RegionList {
         }
     }
 
-    fn pop_unmatched(&mut self, time_stamp: u32) -> Option<SendNonNull<RegionHead>> {
+    fn pop_unmatched(&mut self, time_stamp: u32) -> Option<NonNull<RegionHead>> {
         self.lock.lock();
         let node = self.head.next;
         if let Some(node) = node {
@@ -376,7 +374,7 @@ impl RegionList {
                     panic!("pop_unmatched a wrong region list, tail is none!");
                 }
                 self.lock.unlock();
-                unsafe { Some(SendNonNull::new_unchecked(node)) }
+                unsafe { Some(NonNull::new_unchecked(node)) }
             }
         } else {
             debug_assert!(self.tail.is_none());
@@ -394,7 +392,7 @@ impl RegionList {
                 region.mark();
                 free_size += region.free_size() - origin_free_size;
                 region.sweep_time_stamp = ts;
-                self.push(unsafe { SendNonNull::new_unchecked(region) });
+                self.push(unsafe { NonNull::new_unchecked(region) });
             } else {
                 break;
             }
@@ -417,14 +415,14 @@ impl RegionList {
                         debug_assert!(region.free_size() < REGION_SIZE);
                         GlobalHeap::instance()
                             .free_list
-                            .push(SendNonNull::new_unchecked(region))
+                            .push(NonNull::new_unchecked(region))
                     };
                 } else if region.can_allocate() {
                     region.state = RegionState::Usable;
                     unsafe {
                         debug_assert!(region.free_size() < REGION_SIZE && region.free_size() > 0);
                         GlobalHeap::instance().usable_list[region.bin as usize]
-                            .push(SendNonNull::new_unchecked(region))
+                            .push(NonNull::new_unchecked(region))
                     };
                 } else {
                     region.state = RegionState::Full;
@@ -432,7 +430,7 @@ impl RegionList {
                         debug_assert_eq!(region.free_size(), 0);
                         GlobalHeap::instance()
                             .full_list
-                            .push(SendNonNull::new_unchecked(region))
+                            .push(NonNull::new_unchecked(region))
                     };
                 }
             } else {
@@ -456,20 +454,20 @@ impl RegionList {
                     unsafe {
                         GlobalHeap::instance()
                             .free_list
-                            .push(SendNonNull::new_unchecked(region))
+                            .push(NonNull::new_unchecked(region))
                     };
                 } else if region.can_allocate() {
                     region.state = RegionState::Usable;
                     unsafe {
                         GlobalHeap::instance().usable_list[region.bin as usize]
-                            .push(SendNonNull::new_unchecked(region))
+                            .push(NonNull::new_unchecked(region))
                     };
                 } else {
                     region.state = RegionState::Full;
                     unsafe {
                         GlobalHeap::instance()
                             .full_list
-                            .push(SendNonNull::new_unchecked(region))
+                            .push(NonNull::new_unchecked(region))
                     };
                 }
             } else {
@@ -493,7 +491,7 @@ impl RegionHead {
         self.sweep_time_stamp = u32::MAX;
     }
 
-    unsafe fn allocate(self: &mut RegionHead, id: object::ID) -> Option<SendNonNull<BlockHead>> {
+    unsafe fn allocate(self: &mut RegionHead, id: object::ID) -> Option<NonNull<BlockHead>> {
         // first, allocate a block
         if let Some(block) = self.free_list {
             // remove the block from the free list
@@ -503,7 +501,7 @@ impl RegionHead {
                     if next.is_null() {
                         None
                     } else {
-                        Some(SendNonNull::new_unchecked(next))
+                        Some(NonNull::new_unchecked(next))
                     }
                 }
             }
@@ -517,7 +515,7 @@ impl RegionHead {
                         .byte_add(self.unused_offset as usize)
                         .cast::<BlockHead>();
                     self.unused_offset += bin_size as u32;
-                    Some(SendNonNull::new_unchecked(block))
+                    Some(NonNull::new_unchecked(block))
                 }
             } else {
                 None
@@ -555,7 +553,7 @@ impl RegionHead {
     }
 
     pub(crate) fn mark(&mut self) {
-        let mut new_active_list: Option<SendNonNull<BlockHead>> = None;
+        let mut new_active_list: Option<NonNull<BlockHead>> = None;
         let mut new_marked_list = self.marked_list;
         let mut new_free_list = self.free_list;
         let mut block_head = match self.active_list {
@@ -568,14 +566,13 @@ impl RegionHead {
         while !block_head.is_null() {
             let next_block = unsafe { block_head.as_ref_unchecked().next };
             let entry = unsafe { block_head.as_ref_unchecked().get_entry() };
-            let add_list_head =
-                |block: *mut BlockHead, list: &mut Option<SendNonNull<BlockHead>>| unsafe {
-                    block.as_mut_unchecked().next = match list {
-                        Some(list) => SendMutPtr::new(list.as_ptr()),
-                        None => SendMutPtr::null(),
-                    };
-                    *list = Some(SendNonNull::new_unchecked(block));
+            let add_list_head = |block: *mut BlockHead, list: &mut Option<NonNull<BlockHead>>| unsafe {
+                block.as_mut_unchecked().next = match list {
+                    Some(list) => SendMutPtr::new(list.as_ptr()),
+                    None => SendMutPtr::null(),
                 };
+                *list = Some(NonNull::new_unchecked(block));
+            };
             if entry.is_none() {
                 // block is free
                 add_list_head(block_head, &mut new_free_list);
@@ -585,12 +582,13 @@ impl RegionHead {
                 let mut entry_state = entry.load();
                 loop {
                     match entry_state {
-                        WrappedEntry::Null => continue,
+                        WrappedEntry::Null => break,
                         WrappedEntry::Local(local) => {
                             debug_assert!(entry.is_local());
                             if !std::ptr::addr_eq(local.addr() as *const BlockHead, unsafe {
                                 block_head.as_ref_unchecked().get_object_ptr()
                             }) {
+                                println!("ptr not matched addr");
                                 continue;
                             }
                             let mut new_local = local;
@@ -641,7 +639,7 @@ impl RegionHead {
 
     pub(crate) fn evacuate(&mut self, evacuate_buffer: &mut EvacuateBuffer) {
         let mut new_active_list = self.active_list;
-        let mut new_marked_list: Option<SendNonNull<BlockHead>> = None;
+        let mut new_marked_list: Option<NonNull<BlockHead>> = None;
         let mut new_free_list = self.free_list;
         let mut block_head = match self.marked_list {
             Some(block) => block.as_ptr(),
@@ -650,12 +648,12 @@ impl RegionHead {
                 std::ptr::null_mut()
             }
         };
-        let add_list_head = |block: *mut BlockHead, list: &mut Option<SendNonNull<BlockHead>>| unsafe {
+        let add_list_head = |block: *mut BlockHead, list: &mut Option<NonNull<BlockHead>>| unsafe {
             block.as_mut_unchecked().next = match list {
                 Some(list) => SendMutPtr::new(list.as_ptr()),
                 None => SendMutPtr::null(),
             };
-            *list = Some(SendNonNull::new_unchecked(block));
+            *list = Some(NonNull::new_unchecked(block));
         };
         while !block_head.is_null() {
             let next_block = unsafe { block_head.as_ref_unchecked().next };
@@ -669,7 +667,7 @@ impl RegionHead {
                 let mut entry_state = entry.load();
                 loop {
                     match entry_state {
-                        WrappedEntry::Null => continue,
+                        WrappedEntry::Null => break,
                         WrappedEntry::Local(local) => {
                             if !std::ptr::addr_eq(local.addr() as *const c_void, unsafe {
                                 block_head.as_ref_unchecked().get_object_ptr()
@@ -744,7 +742,7 @@ impl RegionHead {
 
     pub(crate) fn gc(&mut self) {
         let mut new_active_list = self.active_list;
-        let mut new_marked_list: Option<SendNonNull<BlockHead>> = None;
+        let mut new_marked_list: Option<NonNull<BlockHead>> = None;
         let mut new_free_list = self.free_list;
         let mut block_head = match self.marked_list {
             Some(block) => block.as_ptr(),
@@ -753,12 +751,12 @@ impl RegionHead {
                 std::ptr::null_mut()
             }
         };
-        let add_list_head = |block: *mut BlockHead, list: &mut Option<SendNonNull<BlockHead>>| unsafe {
+        let add_list_head = |block: *mut BlockHead, list: &mut Option<NonNull<BlockHead>>| unsafe {
             block.as_mut_unchecked().next = match list {
                 Some(list) => SendMutPtr::new(list.as_ptr()),
                 None => SendMutPtr::null(),
             };
-            *list = Some(SendNonNull::new_unchecked(block));
+            *list = Some(NonNull::new_unchecked(block));
         };
         while !block_head.is_null() {
             let next_block = unsafe { block_head.as_ref_unchecked().next };
@@ -811,7 +809,7 @@ mod tests {
     use crate::mem::RootScope;
     use serial_test::serial;
 
-    fn value_from_block<T>(block: SendNonNull<BlockHead>) -> SendNonNull<T> {
+    fn value_from_block<T>(block: NonNull<BlockHead>) -> NonNull<T> {
         unsafe { block.add(1).cast::<T>() }
     }
 
@@ -858,12 +856,12 @@ mod tests {
         let mut regions = unsafe { regions.assume_init() };
         for region in regions.iter_mut() {
             region.init(0);
-            let region_ptr = unsafe { SendNonNull::new_unchecked(region as *mut RegionHead) };
+            let region_ptr = unsafe { NonNull::new_unchecked(region as *mut RegionHead) };
             list.push(region_ptr);
         }
         let region_ptrs = regions
             .iter_mut()
-            .map(|r| SendNonNull::new(r as *mut RegionHead))
+            .map(|r| NonNull::new(r as *mut RegionHead))
             .collect::<Vec<_>>();
         assert_eq!(list.head.next.map(|p| p.cast()), region_ptrs[0]);
         assert_eq!(list.tail.map(|p| p.cast()), region_ptrs[9]);

@@ -16,17 +16,17 @@ pub struct RemPtr<T> {
 }
 
 /// remoteable reference
-pub struct RemRef<'a, T> {
+pub struct RemRef<'a, T: 'a> {
     reference: &'a T,
 }
 
 /// mutable remoteable reference
-pub struct RemRefMut<'a, T> {
+pub struct RemRefMut<'a, T: 'a> {
     reference: &'a mut T,
 }
 
-unsafe impl<'a, T> Sync for RemRefMut<'a, T> {}
-unsafe impl<'a, T> Send for RemRefMut<'a, T> {}
+unsafe impl<'a, T: 'a> Sync for RemRefMut<'a, T> {}
+unsafe impl<'a, T: 'a> Send for RemRefMut<'a, T> {}
 
 impl<T> RemPtr<T> {
     pub fn null() -> Self {
@@ -140,13 +140,13 @@ impl<T> Drop for RemPtr<T> {
     }
 }
 
-impl<'a, T> RemRef<'a, T> {
+impl<'a, T: 'a> RemRef<'a, T> {
     pub fn new(reference: &'a T) -> Self {
         Self { reference }
     }
 }
 
-impl<'a, T> Deref for RemRef<'a, T> {
+impl<'a, T: 'a> Deref for RemRef<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -154,13 +154,13 @@ impl<'a, T> Deref for RemRef<'a, T> {
     }
 }
 
-impl<'a, T> RemRefMut<'a, T> {
+impl<'a, T: 'a> RemRefMut<'a, T> {
     pub fn new(reference: &'a mut T) -> Self {
         Self { reference }
     }
 }
 
-impl<'a, T> Deref for RemRefMut<'a, T> {
+impl<'a, T: 'a> Deref for RemRefMut<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -168,7 +168,7 @@ impl<'a, T> Deref for RemRefMut<'a, T> {
     }
 }
 
-impl<'a, T> DerefMut for RemRefMut<'a, T> {
+impl<'a, T: 'a> DerefMut for RemRefMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.reference
     }
@@ -178,14 +178,14 @@ pub trait RemRefTrait<'a> {
     fn get_value_addr(&self) -> u64;
 }
 
-impl<T> RemRefTrait<'_> for RemRef<'_, T> {
+impl<'a, T: 'a> RemRefTrait<'a> for RemRef<'a, T> {
     #[inline]
     fn get_value_addr(&self) -> u64 {
         self.reference as *const T as u64
     }
 }
 
-impl<T> RemRefTrait<'_> for RemRefMut<'_, T> {
+impl<'a, T: 'a> RemRefTrait<'a> for RemRefMut<'a, T> {
     #[inline]
     fn get_value_addr(&self) -> u64 {
         self.reference as *const T as u64

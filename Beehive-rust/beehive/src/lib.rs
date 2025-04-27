@@ -6,6 +6,7 @@
 #![feature(ptr_as_ref_unchecked)]
 #![allow(static_mut_refs)]
 #![feature(generic_const_exprs)]
+#![feature(non_null_from_ref)]
 
 use libfibre_port::get_scope_state;
 use mem::manager;
@@ -28,6 +29,7 @@ pub mod profile;
 pub mod thread;
 
 pub mod data_struct;
+pub mod pararoutine;
 pub mod rem_data_struct;
 
 #[repr(C)]

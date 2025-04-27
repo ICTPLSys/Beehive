@@ -1,5 +1,5 @@
-use crate::check_memory_low;
 use crate::mem::DerefScopeTrait;
+use crate::{check_memory_low, pararoutine::yield_now};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug)]
@@ -40,6 +40,12 @@ impl SpinLock {
         self.lock_impl::<true>(None);
     }
 
+    pub fn try_lock(&mut self) -> bool {
+        self.lock
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+    }
+
     pub fn lock_with_scope(&mut self, scope: &dyn DerefScopeTrait) {
         self.lock_impl::<true>(Some(scope));
     }
@@ -50,11 +56,37 @@ impl SpinLock {
 
     pub fn unlock(&mut self) {
         debug_assert!(self.is_locked());
-        self.lock.store(false, Ordering::Release);
+        assert!(
+            self.lock
+                .compare_exchange(true, false, Ordering::Release, Ordering::Relaxed)
+                .is_ok()
+        );
     }
 
     pub fn is_locked(&self) -> bool {
         self.lock.load(Ordering::Relaxed)
+    }
+
+    pub async fn lock_async(&mut self) {
+        self.lock_async_impl(None).await;
+    }
+
+    pub async fn lock_async_with_scope(&mut self, scope: &dyn DerefScopeTrait) {
+        self.lock_async_impl(Some(scope)).await;
+    }
+
+    #[inline]
+    pub async fn lock_async_impl(&mut self, scope: Option<&dyn DerefScopeTrait>) {
+        while self
+            .lock
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            if let Some(scope) = scope {
+                check_memory_low(scope);
+            }
+            yield_now().await;
+        }
     }
 }
 
@@ -80,5 +112,9 @@ impl SpinPollingLock {
 
     pub fn is_locked(&self) -> bool {
         self.spin.is_locked()
+    }
+
+    pub fn try_lock(&mut self) -> bool {
+        self.spin.try_lock()
     }
 }

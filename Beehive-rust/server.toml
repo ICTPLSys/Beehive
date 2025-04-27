@@ -10,11 +10,11 @@ qp_timeout = 8
 qp_retry_cnt = 7
 qp_rnr_retry = 7
 ib_port = 1
-client_memory_size = 16777216
+client_memory_size = 6291456
 evict_batch_size = 262144
 poll_cq_batch_size = 32
-num_cores = 4
-num_evacuate_threads = 2
+num_cores = 16
+num_evacuate_threads = 4
 
 servers = [
     { addr = "127.0.0.1:8888", memory_size = 4294967296 },
