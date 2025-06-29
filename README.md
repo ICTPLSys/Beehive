@@ -215,3 +215,5 @@ cargo run --bin <test> <client config file> # e.g. client.toml
 # FAQ
 
 ​	If you encounter any problems, please open an issue or feel free to contact us. 
+
+ Email: liquanxi20z@ict.ac.cn
